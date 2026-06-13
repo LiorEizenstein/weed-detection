@@ -1,0 +1,19 @@
+arm_controller_node:
+  ros__parameters:
+    scan_dwell_time: 2.0
+    laser_fire_duration: 1.0
+    use_sim_time: true
+
+detection_node:
+  ros__parameters:
+    use_real_model: false
+    model_path: '/home/lior/best.pt'
+    use_sim_time: true
+
+laser_effect_node:
+  ros__parameters:
+    use_sim_time: true
+
+field_manager_node:
+  ros__parameters:
+    use_sim_time: true

@@ -1,0 +1,21 @@
+# ROS2 / colcon generated directories
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Large model weights (keep out of git; distribute separately)
+*.pt
+*.pth
+*.onnx
