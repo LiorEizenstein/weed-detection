@@ -8,6 +8,8 @@ detection_node:
   ros__parameters:
     use_real_model: false
     model_path: '/home/lior/best.pt'
+    save_debug_frames: true
+    debug_frames_dir: '/home/lior/ros2_ws/run_logs/frames'
     use_sim_time: true
 
 laser_effect_node:

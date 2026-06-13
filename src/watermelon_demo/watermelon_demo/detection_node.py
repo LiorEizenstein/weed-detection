@@ -10,6 +10,7 @@ Topic subscribed:
   /camera/image_raw    sensor_msgs/Image
 """
 
+import os
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
@@ -39,10 +40,21 @@ class DetectionNode(Node):
 
         self.declare_parameter('use_real_model', False)
         self.declare_parameter('model_path', '/home/lior/best.pt')
+        self.declare_parameter('save_debug_frames', False)
+        self.declare_parameter(
+            'debug_frames_dir',
+            os.path.expanduser('~/ros2_ws/run_logs/frames'))
 
         self._bridge = CvBridge()
         self._model = None
         self._load_model()
+
+        self._frame_count = 0
+        self._save_idx = 0
+        self._debug_dir = self.get_parameter('debug_frames_dir').value
+        if self.get_parameter('save_debug_frames').value:
+            os.makedirs(self._debug_dir, exist_ok=True)
+            self.get_logger().info(f'Saving debug frames to {self._debug_dir}')
 
         self._sub = self.create_subscription(
             Image, '/camera/image_raw', self._image_cb, 10)
@@ -63,21 +75,53 @@ class DetectionNode(Node):
             self.get_logger().info('Using HSV color stub (use_real_model=false)')
 
     def _image_cb(self, msg: Image):
+        self._frame_count += 1
         frame = self._bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        mask = None
         if self._model is not None:
             detections, annotated = self._run_yolo(frame)
         else:
-            detections, annotated = self._run_stub(frame)
+            detections, annotated, mask = self._run_stub(frame)
         self._det_pub.publish(detections)
         self._img_pub.publish(self._bridge.cv2_to_imgmsg(annotated, encoding='bgr8'))
 
         n_weeds = sum(
             1 for d in detections.detections for h in d.results
             if h.hypothesis.class_id in {'1', '2'})
-        self.get_logger().info(
-            f'image {frame.shape[1]}x{frame.shape[0]} | '
-            f'{len(detections.detections)} detection(s), {n_weeds} weed(s)',
-            throttle_duration_sec=2.0)
+
+        # --- diagnostics: is the camera seeing anything, and anything brown? ---
+        b, g, r = (int(frame[:, :, 0].mean()),
+                   int(frame[:, :, 1].mean()),
+                   int(frame[:, :, 2].mean()))
+        if mask is not None:
+            mask_px = int(cv2.countNonZero(mask))
+            contours = cv2.findContours(
+                mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+            largest = int(max((cv2.contourArea(c) for c in contours), default=0))
+            self.get_logger().info(
+                f'frame#{self._frame_count} {frame.shape[1]}x{frame.shape[0]} '
+                f'meanBGR=({b},{g},{r}) | weed-mask px={mask_px}, '
+                f'{len(contours)} blob(s), largest={largest}px '
+                f'(min={MIN_CONTOUR_AREA}) -> {n_weeds} weed(s)',
+                throttle_duration_sec=2.0)
+        else:
+            self.get_logger().info(
+                f'frame#{self._frame_count} {frame.shape[1]}x{frame.shape[0]} '
+                f'meanBGR=({b},{g},{r}) | {len(detections.detections)} det, '
+                f'{n_weeds} weed(s)',
+                throttle_duration_sec=2.0)
+
+        # --- save raw / mask / annotated frames every ~1.5s for inspection ---
+        if self.get_parameter('save_debug_frames').value \
+                and self._frame_count % 15 == 0:
+            i = self._save_idx % 12
+            cv2.imwrite(os.path.join(self._debug_dir, f'raw_{i:02d}.png'), frame)
+            cv2.imwrite(os.path.join(self._debug_dir, f'annotated_{i:02d}.png'),
+                        annotated)
+            if mask is not None:
+                cv2.imwrite(os.path.join(self._debug_dir, f'mask_{i:02d}.png'),
+                            mask)
+            self._save_idx += 1
 
     def _run_yolo(self, frame):
         results = self._model.predict(frame, conf=CONFIDENCE_THRESHOLD, verbose=False)
@@ -123,7 +167,7 @@ class DetectionNode(Node):
             cv2.putText(annotated, 'weed_stub', (x, y - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 220), 1)
 
-        return array_msg, annotated
+        return array_msg, annotated, weed_mask
 
     @staticmethod
     def _make_detection(cls_id: int, conf: float,

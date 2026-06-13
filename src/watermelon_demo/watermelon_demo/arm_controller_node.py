@@ -127,12 +127,16 @@ class ArmControllerNode(Node):
             return
 
         if self._state == State.INIT:
+            self.get_logger().info('INIT: moving to HOME pose')
             self._move_to(HOME_POSE, duration_sec=3.0)
             self._state = State.SCAN_MOVE
 
         elif self._state == State.SCAN_MOVE:
-            pose = SCAN_POSES[self._scan_idx % len(SCAN_POSES)]
+            idx = self._scan_idx % len(SCAN_POSES)
+            pose = SCAN_POSES[idx]
             self._scan_idx += 1
+            self.get_logger().info(
+                f'SCAN pose {idx + 1}/{len(SCAN_POSES)}  pan={pose[0]:+.2f} rad')
             # Hold in SCANNING until the move finishes, so tick does not
             # immediately fire the next scan move before we look for a weed.
             self._state = State.SCANNING
@@ -171,6 +175,9 @@ class ArmControllerNode(Node):
                 self._state = State.FIRE_LASER
                 return
 
+            self.get_logger().info(
+                f'Centering: weed px=({cx},{cy}) err=({err_x:+.2f},{err_y:+.2f})',
+                throttle_duration_sec=0.5)
             corrected = list(self._current_joints)
             corrected[0] -= err_x * PAN_GAIN
             corrected[1] -= err_y * LIFT_GAIN
@@ -191,6 +198,7 @@ class ArmControllerNode(Node):
                 self._state = State.RETURN_HOME
 
         elif self._state == State.RETURN_HOME:
+            self.get_logger().info('Weed treated — returning HOME, then resuming scan')
             self._move_to(HOME_POSE, duration_sec=3.0,
                           on_done=lambda: self._next_scan())
 
@@ -208,7 +216,9 @@ class ArmControllerNode(Node):
 
     def _move_to(self, joints, duration_sec=3.0, on_done=None):
         if not self._action.wait_for_server(timeout_sec=1.0):
-            self.get_logger().warn('Action server not ready')
+            self.get_logger().warn(
+                'Action server /scaled_joint_trajectory_controller/'
+                'follow_joint_trajectory NOT ready — arm will not move')
             return
 
         goal = FollowJointTrajectory.Goal()
@@ -228,9 +238,15 @@ class ArmControllerNode(Node):
             if on_done:
                 on_done()
 
-        send_future = self._action.send_goal_async(goal)
-        send_future.add_done_callback(
-            lambda f: f.result().get_result_async().add_done_callback(_result_cb))
+        def _goal_response(future):
+            goal_handle = future.result()
+            if not goal_handle.accepted:
+                self.get_logger().warn('Trajectory goal REJECTED by controller')
+                self._busy = False
+                return
+            goal_handle.get_result_async().add_done_callback(_result_cb)
+
+        self._action.send_goal_async(goal).add_done_callback(_goal_response)
 
 
 def main(args=None):
