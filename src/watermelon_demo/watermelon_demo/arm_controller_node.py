@@ -4,7 +4,7 @@ detects weeds via /detections, centres the camera over them, then fires the lase
 
 State machine (shoulder_pan sweeps a wide arc across the field):
   INIT → SCAN_MOVE → SCANNING → WAITING_DETECTION
-       → (weed seen)  MOVE_TO_WEED → FIRE_LASER → FIRING → RETURN_HOME → SCAN_MOVE
+       → (weed seen)  MOVE_TO_WEED → FIRE_LASER → FIRING → SCAN_MOVE
        → (timed out)  SCAN_MOVE   (advance to next pose, never stalls)
 
 Topics subscribed:
@@ -55,22 +55,26 @@ WEED_LOCK_TIMEOUT = 8.0  # s to keep chasing a weed before giving up
 
 IMAGE_W = 640
 IMAGE_H = 480
-PAN_GAIN  = 0.25  # rad per normalised pixel error
-LIFT_GAIN = 0.18
-FIRE_ZONE_FRAC = 0.10  # weed within 10% of image centre counts as "under camera"
+PAN_GAIN    = 0.10  # rad per normalised pixel error (shoulder_pan drives image X)
+WRIST1_GAIN = 0.12  # rad per normalised pixel error (wrist_1 drives image Y)
+FIRE_ZONE_FRAC = 0.20  # weed within 20% of image centre → good enough, fire
+
+# Dead-weed suppression: ignore detections at scan positions within this many
+# radians of a pan angle where we already fired.  Covers ~1.5 PAN_STEPs so
+# the same weed can't be re-detected from adjacent scan poses either.
+TREATED_ZONE_RAD = 0.25
 
 WEED_CLASS_IDS = {'1', '2'}   # weed_side, weed_top
 
 
 class State:
-    INIT             = 'INIT'
-    SCAN_MOVE        = 'SCAN_MOVE'
-    SCANNING         = 'SCANNING'   # arm moving to a scan pose
-    WAITING          = 'WAITING_DETECTION'
-    MOVE_TO_WEED     = 'MOVE_TO_WEED'
-    FIRE_LASER       = 'FIRE_LASER'
-    FIRING           = 'FIRING'     # beam on, waiting out laser_fire_duration
-    RETURN_HOME      = 'RETURN_HOME'
+    INIT         = 'INIT'
+    SCAN_MOVE    = 'SCAN_MOVE'
+    SCANNING     = 'SCANNING'   # arm moving to a scan pose
+    WAITING      = 'WAITING_DETECTION'
+    MOVE_TO_WEED = 'MOVE_TO_WEED'
+    FIRE_LASER   = 'FIRE_LASER'
+    FIRING       = 'FIRING'     # beam on, waiting out laser_fire_duration
 
 
 class ArmControllerNode(Node):
@@ -96,6 +100,7 @@ class ArmControllerNode(Node):
         self._wait_start = 0.0       # sim time we entered WAITING at a pose
         self._fire_start = 0.0       # sim time the laser turned on
         self._lock_start = 0.0       # sim time we locked onto a weed
+        self._treated_pans = []      # shoulder_pan angles where laser already fired
 
         self._timer = self.create_timer(0.1, self._tick)
 
@@ -175,13 +180,21 @@ class ArmControllerNode(Node):
                 self._state = State.FIRE_LASER
                 return
 
-            self.get_logger().info(
-                f'Centering: weed px=({cx},{cy}) err=({err_x:+.2f},{err_y:+.2f})',
-                throttle_duration_sec=0.5)
             corrected = list(self._current_joints)
-            corrected[0] -= err_x * PAN_GAIN
-            corrected[1] -= err_y * LIFT_GAIN
+            # Correct only the dominant-error axis per step.  Applying X and Y
+            # simultaneously causes runaway: the shoulder_pan arc shifts image Y
+            # which fights the wrist_1 correction, which shifts X — coupled loop.
+            if abs(err_x) >= abs(err_y):
+                corrected[0] -= err_x * PAN_GAIN
+                axis = f'X→pan={corrected[0]:+.3f}'
+            else:
+                corrected[3] += err_y * WRIST1_GAIN
+                axis = f'Y→w1={corrected[3]:+.3f}'
             corrected[0] = max(-math.pi, min(math.pi, corrected[0]))
+            corrected[3] = max(-2.5, min(-0.8, corrected[3]))
+            self.get_logger().info(
+                f'Centering: weed px=({cx},{cy}) err=({err_x:+.2f},{err_y:+.2f}) '
+                f'correcting {axis}')
             self._move_to(corrected, duration_sec=WEED_MOVE_TIME,
                           on_done=lambda: None)
 
@@ -195,20 +208,17 @@ class ArmControllerNode(Node):
             if self._now() - self._fire_start > \
                     self.get_parameter('laser_fire_duration').value:
                 self._fire_pub.publish(Bool(data=False))
-                self._state = State.RETURN_HOME
-
-        elif self._state == State.RETURN_HOME:
-            self.get_logger().info('Weed treated — returning HOME, then resuming scan')
-            self._move_to(HOME_POSE, duration_sec=3.0,
-                          on_done=lambda: self._next_scan())
+                fired_pan = self._current_joints[0]
+                self._treated_pans.append(fired_pan)
+                self.get_logger().info(
+                    f'Weed treated — pan={fired_pan:+.2f} blacklisted '
+                    f'(total treated: {len(self._treated_pans)}). Resuming scan.')
+                self._state = State.SCAN_MOVE
 
     def _enter_waiting(self):
         self._last_weed_det = None
         self._wait_start = self._now()
         self._state = State.WAITING
-
-    def _next_scan(self):
-        self._state = State.SCAN_MOVE
 
     # ------------------------------------------------------------------ #
     #  Action helper                                                       #

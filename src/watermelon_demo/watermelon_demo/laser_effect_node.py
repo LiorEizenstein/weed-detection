@@ -107,11 +107,13 @@ class LaserEffectNode(Node):
             self.get_logger().warn(f'TF lookup failed: {e}')
             return None
 
-        # Ray direction in camera frame (z forward, x right, y down)
+        # camera_link frame: +X = optical axis (Gazebo convention), -Y = image right,
+        # -Z = image down.  Do NOT use z-forward — that's the ROS optical convention
+        # but camera_link has +X forward here.
         ray_cam = np.array([
-            (u - CX) / FX,
-            (v - CY) / FY,
             1.0,
+            -(u - CX) / FX,
+            -(v - CY) / FY,
         ])
 
         # Rotation from camera frame to world frame
@@ -122,16 +124,23 @@ class LaserEffectNode(Node):
         ray_world = R @ ray_cam
         origin = np.array([t.x, t.y, t.z])
 
+        self.get_logger().info(
+            f'[laser dbg] camera_link world pos=({origin[0]:.3f},{origin[1]:.3f},{origin[2]:.3f}) '
+            f'ray_world=({ray_world[0]:.3f},{ray_world[1]:.3f},{ray_world[2]:.3f})')
+
         # Intersect ray with horizontal plane z = WEED_GROUND_Z
         if abs(ray_world[2]) < 1e-6:
-            self.get_logger().warn('Ray is parallel to ground — cannot intersect')
+            self.get_logger().warn('Ray is parallel to ground — ray_world_z≈0 suggests wrong camera frame convention')
             return None
         lam = (WEED_GROUND_Z - origin[2]) / ray_world[2]
         if lam < 0:
-            self.get_logger().warn('Weed projected behind camera')
+            self.get_logger().warn(f'Weed projected behind camera (lam={lam:.3f})')
             return None
 
         point = origin + lam * ray_world
+        self.get_logger().info(
+            f'[laser dbg] pixel=({u:.0f},{v:.0f}) lam={lam:.3f} → '
+            f'weed_world=({point[0]:.3f},{point[1]:.3f},{point[2]:.3f})')
         return point  # [x, y, z]
 
     @staticmethod
@@ -147,6 +156,16 @@ class LaserEffectNode(Node):
     # ------------------------------------------------------------------ #
 
     def _publish_beam(self, laser_origin: np.ndarray, weed_xyz: np.ndarray):
+        beam_len = float(np.linalg.norm(weed_xyz - laser_origin))
+        if beam_len > 5.0:
+            self.get_logger().warn(
+                f'[laser dbg] beam length {beam_len:.2f}m looks wrong (>5m) — '
+                f'check camera_link TF convention. '
+                f'laser=({laser_origin[0]:.3f},{laser_origin[1]:.3f},{laser_origin[2]:.3f}) '
+                f'weed=({weed_xyz[0]:.3f},{weed_xyz[1]:.3f},{weed_xyz[2]:.3f})')
+        else:
+            self.get_logger().info(
+                f'[laser dbg] beam length={beam_len:.3f}m — looks reasonable')
         m = Marker()
         m.header.frame_id = 'world'
         m.header.stamp = self.get_clock().now().to_msg()
