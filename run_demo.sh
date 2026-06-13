@@ -10,7 +10,8 @@
 #
 # The newest run is always also reachable at run_logs/latest.log
 #
-set -uo pipefail
+# NB: no 'set -u' — ROS 2 setup.bash references unset vars (AMENT_TRACE_SETUP_FILES)
+set -o pipefail
 
 WS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$WS/run_logs"
