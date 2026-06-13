@@ -1,5 +1,7 @@
 # Weed Detection — UR5 Watermelon-Field Laser Demo
 
+Final project, HUJI University.
+
 A ROS 2 (Jazzy) + Gazebo Sim 8 simulation of a UR5 arm scanning a watermelon
 field, detecting weeds from a wrist-mounted camera, and firing a visual
 Tm:YLF laser beam at each weed.
