@@ -12,6 +12,9 @@ __pycache__/
 # Run logs (kept locally for debugging, not committed)
 run_logs/
 
+# Local tooling config (Claude Code, IDE settings)
+.claude/
+
 # Editor / OS
 .vscode/
 .idea/
