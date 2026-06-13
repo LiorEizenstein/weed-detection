@@ -103,13 +103,14 @@ class TestJointOffsets:
             f"Laser joint xyz expected [-0.02, 0.0, 0.05], got {xyz}"
 
     def test_camera_joint_rpy_points_down(self, urdf_root):
-        """Camera rpy should rotate 90° around Y so optical axis points downward."""
+        """Camera rpy pitch -90° around Y aligns the gz optical axis (+X) with
+        tool0 +Z, so the camera looks DOWN at the field (not back at the arm)."""
         joint = get_joint(urdf_root, "tool0_to_camera")
         origin = joint.find("origin")
         rpy = [float(v) for v in origin.get("rpy").split()]
-        # rpy[1] (pitch) should be ~pi/2 (1.5708 rad)
-        assert rpy[1] == pytest.approx(math.pi / 2, abs=0.01), \
-            f"Camera pitch should be ~1.5708 rad (pi/2) to point downward, got {rpy[1]:.4f}"
+        # rpy[1] (pitch) should be ~-pi/2 (-1.5708 rad)
+        assert rpy[1] == pytest.approx(-math.pi / 2, abs=0.01), \
+            f"Camera pitch should be ~-1.5708 rad (-pi/2) to point downward, got {rpy[1]:.4f}"
 
 
 class TestCameraSensor:

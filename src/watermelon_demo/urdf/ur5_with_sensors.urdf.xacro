@@ -40,10 +40,14 @@
     </inertial>
   </link>
 
+  <!-- rpy pitch of -1.5708 (negative 90 deg about Y). gz cameras look along
+       their +X axis, so this aligns the optical axis with tool0 +Z (the tool
+       approach axis) and the camera looks DOWN at the field. A pitch of
+       +1.5708 pointed it along tool0 -Z, back at the arm (wrong way). -->
   <joint name="tool0_to_camera" type="fixed">
     <parent link="tool0"/>
     <child link="camera_link"/>
-    <origin xyz="0.02 0.0 0.05" rpy="0 1.5708 0"/>
+    <origin xyz="0.02 0.0 0.05" rpy="0 -1.5708 0"/>
   </joint>
 
   <!-- Gazebo camera sensor attached to camera_link -->
