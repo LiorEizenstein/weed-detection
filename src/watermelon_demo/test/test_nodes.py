@@ -49,9 +49,23 @@ class TestArmControllerNode:
         mod = import_node('arm_controller_node')
         assert hasattr(mod, 'ArmControllerNode')
 
-    def test_scan_poses_count(self):
+    def test_scan_poses_sweep_wide_pan(self):
+        """shoulder_pan (joint 0) must sweep a wide arc so the arm scans left to right."""
         mod = import_node('arm_controller_node')
-        assert len(mod.SCAN_POSES) == 4, "Need 4 scan poses to cover the field"
+        pans = [pose[0] for pose in mod.SCAN_POSES]
+        span = max(pans) - min(pans)
+        assert span >= 2.5, \
+            f"Pan sweep should span >= 2.5 rad (~140 deg) left-right, got {span:.2f} rad"
+
+    def test_scan_poses_small_steps(self):
+        """Consecutive scan poses must differ by a small pan step for a smooth sweep."""
+        mod = import_node('arm_controller_node')
+        pans = [pose[0] for pose in mod.SCAN_POSES]
+        max_step = max(abs(a - b) for a, b in zip(pans, pans[1:]))
+        assert max_step <= 0.2, \
+            f"Pan step between poses should be small (<=0.2 rad), got {max_step:.2f} rad"
+        assert len(mod.SCAN_POSES) >= 12, \
+            f"Small steps over the arc should give many poses, got {len(mod.SCAN_POSES)}"
 
     def test_scan_poses_joint_count(self):
         mod = import_node('arm_controller_node')

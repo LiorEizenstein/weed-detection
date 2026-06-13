@@ -24,6 +24,13 @@ CONFIDENCE_THRESHOLD = 0.7
 SOIL_OFFSET_FACTOR = 0.08
 TOP_Y_FACTOR = 0.55
 
+# HSV stub thresholds for the brown/orange weed cylinders (use_real_model=false).
+# Wide enough to survive Gazebo lighting, but hue<=30 excludes green watermelons
+# and sat>=50 excludes the grey ground plane.
+WEED_HSV_LOW  = (5, 50, 40)
+WEED_HSV_HIGH = (30, 255, 255)
+MIN_CONTOUR_AREA = 40          # px^2 — weeds are small/far, so keep this low
+
 
 class DetectionNode(Node):
 
@@ -64,6 +71,14 @@ class DetectionNode(Node):
         self._det_pub.publish(detections)
         self._img_pub.publish(self._bridge.cv2_to_imgmsg(annotated, encoding='bgr8'))
 
+        n_weeds = sum(
+            1 for d in detections.detections for h in d.results
+            if h.hypothesis.class_id in {'1', '2'})
+        self.get_logger().info(
+            f'image {frame.shape[1]}x{frame.shape[0]} | '
+            f'{len(detections.detections)} detection(s), {n_weeds} weed(s)',
+            throttle_duration_sec=2.0)
+
     def _run_yolo(self, frame):
         results = self._model.predict(frame, conf=CONFIDENCE_THRESHOLD, verbose=False)
         array_msg = Detection2DArray()
@@ -94,11 +109,11 @@ class DetectionNode(Node):
         annotated = frame.copy()
 
         weed_mask = cv2.inRange(hsv,
-                                np.array([5, 60, 40]),
-                                np.array([25, 255, 200]))
+                                np.array(WEED_HSV_LOW),
+                                np.array(WEED_HSV_HIGH))
         for contour in cv2.findContours(
                 weed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]:
-            if cv2.contourArea(contour) < 100:
+            if cv2.contourArea(contour) < MIN_CONTOUR_AREA:
                 continue
             x, y, w, h = cv2.boundingRect(contour)
             cx, cy = x + w // 2, y + h // 2

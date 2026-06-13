@@ -1,6 +1,6 @@
 arm_controller_node:
   ros__parameters:
-    scan_dwell_time: 2.0
+    scan_dwell_time: 1.0
     laser_fire_duration: 1.0
     use_sim_time: true
 
