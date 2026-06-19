@@ -171,6 +171,29 @@ scripts/
 
 ---
 
+## Real Hardware (UR5 + RealSense D435)
+
+**Prerequisites:** `ur_robot_driver`, `realsense2_camera`, `image_view` installed.
+
+**Before first run:** measure the physical offset from the UR5 `tool0` flange
+to the RealSense D435 optical centre and update the `CAMERA_*` constants in
+`launch/demo_real.launch.py`.
+
+```bash
+# Detection-only (arm centres over weeds, never fires):
+ros2 launch watermelon_demo demo_real.launch.py \
+    robot_ip:=192.168.1.100 dry_run:=true
+
+# Full pipeline (arm centres and signals laser firing):
+ros2 launch watermelon_demo demo_real.launch.py \
+    robot_ip:=192.168.1.100 dry_run:=false
+```
+
+A live annotated camera window (`image_view`) opens automatically showing
+real-time weed detections. RViz shows the 3D field markers and laser beam arrow.
+
+---
+
 ## Detection Classes
 
 | ID | Label | Notes |
