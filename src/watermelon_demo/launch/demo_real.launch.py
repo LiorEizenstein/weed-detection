@@ -147,7 +147,8 @@ def generate_launch_description():
     )
 
     # ── 4. Static TF: tool0 → laser_link ────────────────────────────────────
-    # Laser fires through the camera aperture — treat as coincident with camera.
+    # Laser fires through the camera aperture — fully coincident with camera_link,
+    # so use the same calibrated rotation (quaternion or RPY from _rotation_args).
     laser_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -156,7 +157,7 @@ def generate_launch_description():
             '--x', str(CAMERA_X),
             '--y', str(CAMERA_Y),
             '--z', str(CAMERA_Z),
-            '--roll', '0.0', '--pitch', '0.0', '--yaw', '0.0',
+            *_rotation_args,
             '--frame-id',       'tool0',
             '--child-frame-id', 'laser_link',
         ],

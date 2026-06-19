@@ -83,8 +83,8 @@ class LaserEffectNode(Node):
 
     def _camera_info_cb(self, msg):
         """Update ray-cast intrinsics from RealSense calibration (fires once)."""
-        if len(msg.k) < 6 or msg.k[0] == 0.0:
-            self.get_logger().warn('Ignoring degenerate CameraInfo (k too short or fx=0)')
+        if len(msg.k) < 9 or msg.k[0] == 0.0 or msg.k[4] == 0.0:
+            self.get_logger().warn('Ignoring degenerate CameraInfo (k too short or fx/fy=0)')
             return
         self._intrinsics = (msg.k[0], msg.k[4], msg.k[2], msg.k[5])
         self.get_logger().info(

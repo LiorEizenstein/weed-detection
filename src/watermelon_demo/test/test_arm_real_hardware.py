@@ -4,6 +4,7 @@ in arm_controller_node without a running ROS context.
 """
 import sys
 import math
+import pytest
 from unittest.mock import MagicMock
 
 for _m in [
@@ -46,6 +47,8 @@ def _make_node():
     node._fire_pub = MagicMock()
     node._info_sub = MagicMock()
     node._intrinsics = (_mod._FX, _mod._FY, _mod._CX_OPT, _mod._CY_OPT)
+    node._joints_received = False
+    node._tf_warn_time = 0.0
     node._current_joints = list(_mod.HOME_POSE)
     node._busy = False
     node._state = _mod.State.INIT
@@ -92,14 +95,14 @@ class TestCameraInfoCallback:
         node.destroy_subscription.assert_called_once_with(node._info_sub)
 
     def test_second_call_does_not_reach_here_after_unsub(self):
-        """Verify unsubscribe is called — repeated calls in tests don't reflect runtime."""
+        """destroy_subscription is mocked so a second call CAN overwrite in tests,
+        but this test documents that at runtime it would not happen."""
         node = _make_node()
         node._camera_info_cb(_make_camera_info(600.0, 600.0, 320.0, 240.0))
-        first = node._intrinsics
-        # Simulate a second call (would not happen at runtime after destroy_subscription)
-        node._camera_info_cb(_make_camera_info(999.0, 999.0, 160.0, 120.0))
-        # Intrinsics overwritten — but in production destroy_subscription prevents this
-        assert first == (600.0, 600.0, 320.0, 240.0)
+        # Verify destroy_subscription was called after the first valid message
+        node.destroy_subscription.assert_called_once_with(node._info_sub)
+        # After first valid message intrinsics should be set correctly
+        assert node._intrinsics == (600.0, 600.0, 320.0, 240.0)
 
     def test_degenerate_fx_zero_ignored(self):
         node = _make_node()
@@ -170,6 +173,3 @@ class TestJointStateCallback:
             positions = {n: angle for n in JOINT_NAMES}
             node._joint_state_cb(_make_joint_state(positions))
         assert all(v == pytest.approx(1.0) for v in node._current_joints)
-
-
-import pytest

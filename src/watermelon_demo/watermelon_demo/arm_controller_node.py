@@ -141,7 +141,18 @@ class ArmControllerNode(Node):
         self._treated_pans = []      # shoulder_pan angles where laser already fired
         self._treated_world_xy = []  # (x, y) world positions of treated weeds
 
+        # Logging helpers
+        self._joints_received = False  # log first /joint_states arrival once
+        self._tf_warn_time = 0.0       # throttle TF-failure warnings to 1/5 s
+
         self._timer = self.create_timer(0.1, self._tick)
+        self.get_logger().info(
+            f'arm_controller_node ready  '
+            f'dry_run={self.get_parameter("dry_run").value}  '
+            f'scan_poses={len(SCAN_POSES)}  '
+            f'dwell={self.get_parameter("scan_dwell_time").value}s  '
+            f'fire_dur={self.get_parameter("laser_fire_duration").value}s'
+        )
 
     def _now(self) -> float:
         return self.get_clock().now().nanoseconds / 1e9
@@ -153,18 +164,24 @@ class ArmControllerNode(Node):
     def _detection_cb(self, msg: Detection2DArray):
         best = None
         best_conf = 0.0
+        weed_count = 0
         for det in msg.detections:
             for hyp in det.results:
                 if hyp.hypothesis.class_id in WEED_CLASS_IDS:
+                    weed_count += 1
                     if hyp.hypothesis.score > best_conf:
                         best_conf = hyp.hypothesis.score
                         best = (int(det.bbox.center.position.x),
                                 int(det.bbox.center.position.y))
+        if weed_count > 0:
+            self.get_logger().debug(
+                f'Detection: {weed_count} weed(s)  '
+                f'best px={best} conf={best_conf:.2f}')
         self._last_weed_det = best
 
     def _camera_info_cb(self, msg: CameraInfo):
-        if len(msg.k) < 6 or msg.k[0] == 0.0:
-            self.get_logger().warn('Ignoring degenerate CameraInfo (k too short or fx=0)')
+        if len(msg.k) < 9 or msg.k[0] == 0.0 or msg.k[4] == 0.0:
+            self.get_logger().warn('Ignoring degenerate CameraInfo (k too short or fx/fy=0)')
             return
         self._intrinsics = (msg.k[0], msg.k[4], msg.k[2], msg.k[5])
         self.get_logger().info(
@@ -176,6 +193,11 @@ class ArmControllerNode(Node):
         pos_by_name = dict(zip(msg.name, msg.position))
         try:
             self._current_joints = [pos_by_name[n] for n in JOINT_NAMES]
+            if not self._joints_received:
+                self._joints_received = True
+                self.get_logger().info(
+                    f'First /joint_states received  '
+                    f'pan={self._current_joints[0]:+.3f} rad')
         except KeyError:
             pass  # partial message — not all joints published yet
 
@@ -228,6 +250,10 @@ class ArmControllerNode(Node):
                     self._state = State.MOVE_TO_WEED
             elif self._now() - self._wait_start > \
                     self.get_parameter('scan_dwell_time').value:
+                self.get_logger().info(
+                    f'WAITING: no weed in '
+                    f'{self.get_parameter("scan_dwell_time").value:.1f}s '
+                    f'— advancing scan')
                 self._state = State.SCAN_MOVE
 
         elif self._state == State.MOVE_TO_WEED:
@@ -249,6 +275,9 @@ class ArmControllerNode(Node):
             # Weed is under the camera → fire.  Use circular threshold to avoid
             # firing 41% off-axis when the weed sits in a corner of the square zone.
             if math.hypot(err_x, err_y) < FIRE_ZONE_FRAC:
+                self.get_logger().info(
+                    f'Weed centred: err=({err_x:+.3f},{err_y:+.3f}) '
+                    f'dist={math.hypot(err_x, err_y):.3f} < {FIRE_ZONE_FRAC} → FIRE_LASER')
                 self._state = State.FIRE_LASER
                 return
 
@@ -306,7 +335,11 @@ class ArmControllerNode(Node):
         try:
             tf = self._tf_buffer.lookup_transform(
                 'world', 'camera_link', rclpy.time.Time())
-        except Exception:
+        except Exception as exc:
+            now = self._now()
+            if now - self._tf_warn_time > 5.0:
+                self._tf_warn_time = now
+                self.get_logger().warn(f'TF world→camera_link unavailable: {exc}')
             return None
         t = tf.transform.translation
         q = tf.transform.rotation
@@ -316,11 +349,17 @@ class ArmControllerNode(Node):
         ray_world = R @ ray_cam
         origin = np.array([t.x, t.y, t.z])
         if abs(ray_world[2]) < 1e-6:
+            self.get_logger().warn('_pixel_to_world_xy: ray parallel to ground plane')
             return None
         lam = (_WEED_Z - origin[2]) / ray_world[2]
         if lam < 0:
+            self.get_logger().warn(
+                f'_pixel_to_world_xy: camera looking away from ground '
+                f'(lam={lam:.3f}) — check TF/camera orientation')
             return None
         pt = origin + lam * ray_world
+        self.get_logger().debug(
+            f'World proj: px=({cx},{cy}) → ({pt[0]:.3f},{pt[1]:.3f})m')
         return (float(pt[0]), float(pt[1]))
 
     @staticmethod
@@ -344,13 +383,17 @@ class ArmControllerNode(Node):
         self._last_weed_det = None
         self._wait_start = self._now()
         self._state = State.WAITING
+        self.get_logger().info(
+            f'WAITING at pan={current_pan:+.2f} rad '
+            f'(dwell={self.get_parameter("scan_dwell_time").value:.1f}s)'
+        )
 
     # ------------------------------------------------------------------ #
     #  Action helper                                                       #
     # ------------------------------------------------------------------ #
 
     def _move_to(self, joints, duration_sec=3.0, on_done=None):
-        if not self._action.wait_for_server(timeout_sec=1.0):
+        if not self._action.wait_for_server(timeout_sec=0.0):
             self.get_logger().warn(
                 'Action server /scaled_joint_trajectory_controller/'
                 'follow_joint_trajectory NOT ready — arm will not move')

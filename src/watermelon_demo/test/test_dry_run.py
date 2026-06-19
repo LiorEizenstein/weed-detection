@@ -58,6 +58,8 @@ def _make_node(dry_run: bool):
     node._info_sub = MagicMock()
     node.destroy_subscription = MagicMock()
     node._intrinsics = (_mod._FX, _mod._FY, _mod._CX_OPT, _mod._CY_OPT)
+    node._joints_received = False
+    node._tf_warn_time = 0.0
     node._busy = False
     node._state = State.FIRE_LASER
     node._scan_idx = 0
