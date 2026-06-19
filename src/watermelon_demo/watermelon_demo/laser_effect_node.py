@@ -28,13 +28,15 @@ from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point
 from tf2_ros import Buffer, TransformListener
 from builtin_interfaces.msg import Duration
+from sensor_msgs.msg import CameraInfo
 
 
-# Camera intrinsics for 640x480, horizontal_fov=1.047 rad (60 deg)
+# Camera intrinsics — Gazebo fallback (640×480, hfov=1.047 rad).
+# Overridden at runtime by CameraInfo messages (real RealSense D435).
 IMG_W = 640
 IMG_H = 480
 HFOV  = 1.047
-FX = (IMG_W / 2) / math.tan(HFOV / 2)
+FX = (IMG_W / 2) / math.tan(HFOV / 2)   # ≈ 554.3 px
 FY = FX
 CX = IMG_W / 2.0
 CY = IMG_H / 2.0
@@ -60,6 +62,15 @@ class LaserEffectNode(Node):
 
         self._last_weed_pixel = None   # (cx, cy) in image coords
 
+        # Intrinsics — start with Gazebo fallback, updated by CameraInfo
+        self._fx = FX
+        self._fy = FY
+        self._cx = CX
+        self._cy = CY
+
+        self._info_sub = self.create_subscription(
+            CameraInfo, '/camera/color/camera_info', self._camera_info_cb, 1)
+
     # ------------------------------------------------------------------ #
 
     def _detection_cb(self, msg: Detection2DArray):
@@ -71,6 +82,13 @@ class LaserEffectNode(Node):
                         det.bbox.center.position.y,
                     )
                     return
+
+    def _camera_info_cb(self, msg):
+        """Update ray-cast intrinsics from RealSense calibration."""
+        self._fx = msg.k[0]
+        self._fy = msg.k[4]
+        self._cx = msg.k[2]
+        self._cy = msg.k[5]
 
     def _fire_cb(self, msg: Bool):
         if not msg.data:
@@ -112,8 +130,8 @@ class LaserEffectNode(Node):
         # but camera_link has +X forward here.
         ray_cam = np.array([
             1.0,
-            -(u - CX) / FX,
-            -(v - CY) / FY,
+            -(u - self._cx) / self._fx,
+            -(v - self._cy) / self._fy,
         ])
 
         # Rotation from camera frame to world frame
