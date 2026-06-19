@@ -11,14 +11,17 @@ sudo apt install ros-jazzy-ur-robot-driver \
 
 ## 2. Copy / build the project
 
-Since you are copying from your dev machine (not cloning from git):
+Since you are copying from your dev machine (not cloning from git),
+copy the entire `ros2_ws/src/` directory (includes `watermelon_demo` **and**
+`easy_handeye2` submodule which is already checked out locally):
 
 ```bash
 # On the robot PC:
-mkdir -p ~/ros2_ws/src
-# Copy the watermelon_demo package from your dev machine, then:
+mkdir -p ~/ros2_ws
+# Copy src/ from dev machine, then:
 cd ~/ros2_ws
-colcon build --packages-select watermelon_demo
+rosdep install -iyr --from-paths src   # installs easy_handeye2 deps too
+colcon build --packages-select watermelon_demo easy_handeye2
 source install/setup.bash
 ```
 
@@ -27,15 +30,10 @@ source install/setup.bash
 This gives you the exact `tool0 → camera_link` transform automatically.
 Much more accurate than measuring with calipers.
 
-### 3a. Install easy_handeye2
+### 3a. easy_handeye2 is already included
 
-```bash
-cd ~/ros2_ws
-git clone https://github.com/marcoesposito1988/easy_handeye2 src/easy_handeye2
-rosdep install -iyr --from-paths src
-colcon build --packages-select easy_handeye2
-source install/setup.bash
-```
+`easy_handeye2` is a git submodule in this repo — it was copied along with `src/`.
+It was built in step 2. Nothing extra to install.
 
 ### 3b. Print and place the ArUco marker
 
