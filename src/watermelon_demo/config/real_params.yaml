@@ -1,0 +1,21 @@
+arm_controller_node:
+  ros__parameters:
+    scan_dwell_time: 1.0
+    laser_fire_duration: 1.0
+    dry_run: false          # override at launch: dry_run:=true for detection-only
+    use_sim_time: false
+
+detection_node:
+  ros__parameters:
+    use_real_model: true
+    model_path: '/home/lior/best.pt'
+    save_debug_frames: false
+    use_sim_time: false
+
+laser_effect_node:
+  ros__parameters:
+    use_sim_time: false
+
+field_manager_node:
+  ros__parameters:
+    use_sim_time: false
