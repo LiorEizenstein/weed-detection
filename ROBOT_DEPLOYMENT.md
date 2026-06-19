@@ -6,6 +6,7 @@
 
 ```bash
 sudo apt install ros-jazzy-ur-robot-driver \
+                 ros-jazzy-ur-description \
                  ros-jazzy-realsense2-camera \
                  ros-jazzy-image-view \
                  ros-jazzy-aruco-opencv   # needed for easy_handeye2 calibration
@@ -221,8 +222,14 @@ All tests should pass (or skip/xfail as noted above). No hard failures allowed b
 
 ## 5. YOLO model (optional)
 
-Place `best.pt` at `/home/lior/best.pt`.
-Without it, add `use_real_model:=false` to fall back to the HSV colour stub.
+Place `best.pt` at `/home/lior/best.pt` (the default path).
+Without it, pass `use_real_model:=false` to fall back to the HSV colour stub.
+
+To use a different path:
+```bash
+ros2 launch watermelon_demo demo_real.launch.py \
+    robot_ip:=<ur5_ip> model_path:=/path/to/best.pt
+```
 
 ---
 
@@ -244,9 +251,17 @@ ros2 launch watermelon_demo demo_real.launch.py \
 ros2 launch watermelon_demo demo_real.launch.py \
     robot_ip:=<ur5_ip> dry_run:=false
 
-# Without YOLO model:
+# Without YOLO model (HSV colour stub):
 ros2 launch watermelon_demo demo_real.launch.py \
     robot_ip:=<ur5_ip> dry_run:=true use_real_model:=false
+
+# Custom model path:
+ros2 launch watermelon_demo demo_real.launch.py \
+    robot_ip:=<ur5_ip> model_path:=/path/to/best.pt
 ```
 
 A live annotated camera window opens automatically. RViz shows 3D field markers.
+
+> **Note:** The UR5 driver takes ~10 s to initialise. Demo nodes start automatically
+> after 15 s. If you see "action server not available" errors before that, they are
+> transient — wait for the full startup sequence to complete.
