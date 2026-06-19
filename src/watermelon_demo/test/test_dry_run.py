@@ -99,7 +99,6 @@ class TestDryRunFalseFiresNormally:
 
     def test_laser_fire_true_published(self):
         """dry_run=False: /laser_fire True is published."""
-        from std_msgs.msg import Bool as _Bool
         node = _make_node(dry_run=False)
         node._tick()
         node._fire_pub.publish.assert_called_once()
