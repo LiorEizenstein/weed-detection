@@ -35,17 +35,16 @@ def _make_laser_node():
         info=MagicMock(), warn=MagicMock()))
     node.create_subscription = MagicMock()
     node.create_publisher = MagicMock(return_value=MagicMock())
+    node.destroy_subscription = MagicMock()
     node.get_clock = MagicMock(return_value=MagicMock(
         now=MagicMock(return_value=MagicMock(to_msg=MagicMock()))))
     node._tf_buffer = MagicMock()
     node._tf_listener = MagicMock()
     node._marker_pub = MagicMock()
     node._last_weed_pixel = None
-    # Initialise intrinsics to hardcoded fallback values
-    node._fx = _laser_mod.FX
-    node._fy = _laser_mod.FY
-    node._cx = _laser_mod.CX
-    node._cy = _laser_mod.CY
+    node._info_sub = MagicMock()
+    # Initialise intrinsics tuple to hardcoded fallback values
+    node._intrinsics = (_laser_mod.FX, _laser_mod.FY, _laser_mod.CX, _laser_mod.CY)
     return node
 
 
@@ -61,40 +60,42 @@ class TestCameraInfoUpdatesIntrinsics:
     def test_fx_updated_from_camera_info(self):
         node = _make_laser_node()
         node._camera_info_cb(_make_camera_info(fx=600.0, fy=600.0, cx=320.0, cy=240.0))
-        assert node._fx == 600.0, f"Expected _fx=600.0, got {node._fx}"
+        fx, fy, cx, cy = node._intrinsics
+        assert fx == 600.0, f"Expected fx=600.0, got {fx}"
 
     def test_fy_updated_from_camera_info(self):
         node = _make_laser_node()
         node._camera_info_cb(_make_camera_info(fx=600.0, fy=605.0, cx=320.0, cy=240.0))
-        assert node._fy == 605.0, f"Expected _fy=605.0, got {node._fy}"
+        fx, fy, cx, cy = node._intrinsics
+        assert fy == 605.0, f"Expected fy=605.0, got {fy}"
 
     def test_cx_cy_updated_from_camera_info(self):
         node = _make_laser_node()
         node._camera_info_cb(_make_camera_info(fx=600.0, fy=600.0, cx=321.5, cy=241.5))
-        assert node._cx == 321.5
-        assert node._cy == 241.5
+        fx, fy, cx, cy = node._intrinsics
+        assert cx == 321.5
+        assert cy == 241.5
 
-    def test_second_camera_info_overwrites_first(self):
+    def test_degenerate_camera_info_ignored(self):
+        """CameraInfo with fx=0 must be ignored (guards against bad calibration)."""
         node = _make_laser_node()
-        node._camera_info_cb(_make_camera_info(fx=600.0, fy=600.0, cx=320.0, cy=240.0))
-        node._camera_info_cb(_make_camera_info(fx=700.0, fy=700.0, cx=330.0, cy=250.0))
-        assert node._fx == 700.0
+        original = node._intrinsics
+        bad_info = _make_camera_info(fx=0.0, fy=0.0, cx=320.0, cy=240.0)
+        node._camera_info_cb(bad_info)
+        assert node._intrinsics == original, "Degenerate CameraInfo should not update intrinsics"
 
 
 class TestFallbackIntrinsics:
     def test_fallback_values_are_hardcoded_defaults(self):
         """Before any CameraInfo arrives, intrinsics equal the hardcoded Gazebo values."""
         node = _make_laser_node()
-        expected_fx = _laser_mod.FX
-        assert abs(node._fx - expected_fx) < 1e-6, (
-            f"Fallback _fx should be {expected_fx}, got {node._fx}")
+        fx, fy, cx, cy = node._intrinsics
+        assert abs(fx - _laser_mod.FX) < 1e-6, (
+            f"Fallback fx should be {_laser_mod.FX}, got {fx}")
 
-    def test_pixel_to_world_uses_instance_intrinsics(self):
-        """_pixel_to_world uses _fx/_fy/_cx/_cy, not the module-level constants."""
+    def test_pixel_to_world_uses_intrinsics_tuple(self):
+        """_pixel_to_world must unpack self._intrinsics, not use module-level constants."""
         import inspect
-        # We use inspect.getsource to confirm the method body references self._fx
         src = inspect.getsource(LaserEffectNode._pixel_to_world)
-        assert 'self._fx' in src, (
-            "_pixel_to_world must use self._fx, not module-level FX")
-        assert 'self._fy' in src, (
-            "_pixel_to_world must use self._fy, not module-level FY")
+        assert 'self._intrinsics' in src, (
+            "_pixel_to_world must use self._intrinsics, not module-level FX/CX")

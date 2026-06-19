@@ -62,11 +62,9 @@ class LaserEffectNode(Node):
 
         self._last_weed_pixel = None   # (cx, cy) in image coords
 
-        # Intrinsics — start with Gazebo fallback, updated by CameraInfo
-        self._fx = FX
-        self._fy = FY
-        self._cx = CX
-        self._cy = CY
+        # Intrinsics stored as a single tuple so updates are atomic (CPython GIL).
+        # Initialised to Gazebo fallback; replaced on first CameraInfo message.
+        self._intrinsics = (FX, FY, CX, CY)   # (fx, fy, cx, cy)
 
         self._info_sub = self.create_subscription(
             CameraInfo, '/camera/color/camera_info', self._camera_info_cb, 1)
@@ -84,11 +82,15 @@ class LaserEffectNode(Node):
                     return
 
     def _camera_info_cb(self, msg):
-        """Update ray-cast intrinsics from RealSense calibration."""
-        self._fx = msg.k[0]
-        self._fy = msg.k[4]
-        self._cx = msg.k[2]
-        self._cy = msg.k[5]
+        """Update ray-cast intrinsics from RealSense calibration (fires once)."""
+        if len(msg.k) < 6 or msg.k[0] == 0.0:
+            self.get_logger().warn('Ignoring degenerate CameraInfo (k too short or fx=0)')
+            return
+        self._intrinsics = (msg.k[0], msg.k[4], msg.k[2], msg.k[5])
+        self.get_logger().info(
+            f'CameraInfo received: fx={msg.k[0]:.1f} fy={msg.k[4]:.1f} '
+            f'cx={msg.k[2]:.1f} cy={msg.k[5]:.1f}')
+        self.destroy_subscription(self._info_sub)
 
     def _fire_cb(self, msg: Bool):
         if not msg.data:
@@ -128,10 +130,11 @@ class LaserEffectNode(Node):
         # camera_link frame: +X = optical axis (Gazebo convention), -Y = image right,
         # -Z = image down.  Do NOT use z-forward — that's the ROS optical convention
         # but camera_link has +X forward here.
+        fx, fy, cx, cy = self._intrinsics
         ray_cam = np.array([
             1.0,
-            -(u - self._cx) / self._fx,
-            -(v - self._cy) / self._fy,
+            -(u - cx) / fx,
+            -(v - cy) / fy,
         ])
 
         # Rotation from camera frame to world frame
