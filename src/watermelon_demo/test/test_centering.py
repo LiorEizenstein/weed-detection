@@ -2,18 +2,22 @@
 test_centering.py — unit-level simulation of the MOVE_TO_WEED centering loop.
 
 Runs the centering state-machine logic against a calibrated linear kinematic
-model of the arm and verifies pixel error converges to the fire zone for every
-weed scenario recorded in run_20260613_013159.log.
+model of the arm and verifies pixel error converges to the fire zone.
 
-World model (calibrated against log step 1→2 for OLD algorithm):
-    Δerr_x ≈  delta_pan  * C_PAN_X  –  delta_joint_y * C_JY_X_CROSS
-    Δerr_y ≈  delta_joint_y * (–C_JY_Y) + delta_pan * C_PAN_Y_CROSS
+World model (X/Y coupling measured from logs; wrist_2 effect is the assumed
+perpendicular axis to wrist_1 — to be recalibrated after next demo run):
 
-    C_PAN_X    = 2.00  — shoulder_pan moves image X (calibrated: 1–0.25*2=0.50/step)
-    C_PAN_Y    = 0.10  — pan→Y cross-coupling (small)
-    C_JY_Y     = 0.80  — Y-joint  corrects image Y (lift or wrist_1)
-    C_JY_X_OLD = 0.40  — shoulder_lift→X cross-coupling (LARGE, causes divergence)
-    C_JY_X_NEW = 0.03  — wrist_1→X  cross-coupling (tiny, wrist is near camera)
+    Δerr_x ≈  delta_pan * C_PAN_X  – delta_w2 * C_W2_X_CROSS
+    Δerr_y ≈ –delta_w2  * C_W2_Y   + delta_pan * C_PAN_Y_CROSS
+
+    C_PAN_X       = 2.00  — shoulder_pan → image X (measured: ~2.65/rad from log)
+    C_PAN_Y_CROSS = 0.10  — pan → Y cross-coupling
+    C_W2_Y        = 1.50  — wrist_2 → image Y (assumed; wrist_1 measured ≈0 for Y)
+    C_W2_X_CROSS  = 0.05  — wrist_2 → X cross-coupling (small, perpendicular axis)
+    C_JY_X_OLD    = 0.40  — shoulder_lift → X cross-coupling (OLD algo, kept for regression)
+
+Key finding from run logs: wrist_1 at wrist_2=-π/2 acts as a 2nd pan joint
+(moves image X ~2.65/rad but Y ~0/rad). wrist_2 is the correct elevation axis.
 
 Run:
     cd ~/ros2_ws
@@ -26,16 +30,23 @@ import pytest
 # ── pull live constants from the module under test ──────────────────────────
 import importlib
 _mod = importlib.import_module('watermelon_demo.arm_controller_node')
-PAN_GAIN       = _mod.PAN_GAIN
 WRIST1_GAIN    = _mod.WRIST1_GAIN
+WRIST2_GAIN    = _mod.WRIST2_GAIN
 FIRE_ZONE_FRAC = _mod.FIRE_ZONE_FRAC
 
 # ── world-model coefficients ─────────────────────────────────────────────────
-C_PAN_X       = 2.00   # shoulder_pan  → image X (primary)
-C_PAN_Y_CROSS = 0.10   # shoulder_pan  → image Y (cross, arm sweeps arc)
-C_JY_Y        = 0.80   # Y-axis joint  → image Y (primary)
-C_JY_X_OLD    = 0.40   # shoulder_lift → image X cross-coupling (large: far base joint)
-C_JY_X_NEW    = 0.03   # wrist_1       → image X cross-coupling (tiny: near camera)
+# Measured from logs (run_20260613_085200):
+#   wrist_1 +0.082 rad/step → ΔX ≈ +0.22  (C_W1_X ≈ 2.68), ΔY ≈ +0.01 (tiny)
+#   wrist_2 -0.084 rad/step → ΔY ≈ -0.15  (C_W2_Y ≈ 1.79), ΔX ≈  0.00 (none)
+# The two joints are nearly orthogonal → simultaneous correction is stable.
+C_W1_X        = 2.68   # wrist_1 → image X (measured); dw1>0 → X increases
+C_W1_Y_CROSS  = 0.12   # wrist_1 → image Y cross-coupling (small)
+C_W2_Y        = 1.79   # wrist_2 → image Y (measured); dw2<0 → Y decreases
+C_W2_X_CROSS  = 0.05   # wrist_2 → image X cross-coupling (negligible)
+
+# OLD algorithm (shoulder_lift + pan simultaneously):
+C_JY_Y        = 0.80   # shoulder_lift → image Y
+C_JY_X_OLD    = 0.40   # shoulder_lift → image X cross-coupling (large → diverges)
 
 MAX_STEPS = 25         # generous cap; good controller converges ≤ 12
 
@@ -57,41 +68,50 @@ def _pix_to_err(cx, cy):
 
 # ── world model ──────────────────────────────────────────────────────────────
 
-def world_step(err_x, err_y, dpan, djoint_y, c_jy_x_cross):
-    """Return updated pixel errors after joint deltas are applied."""
-    new_x = err_x + dpan * C_PAN_X - djoint_y * c_jy_x_cross
-    new_y = err_y - djoint_y * C_JY_Y + dpan * C_PAN_Y_CROSS
+def world_step(err_x, err_y, dw1, dw2):
+    """Dual-wrist world model (new algorithm).
+    dw1 < 0 for positive err_x (wrist_1 corrects X); dw2 < 0 for positive err_y."""
+    new_x = err_x + dw1 * C_W1_X   + dw2 * C_W2_X_CROSS
+    new_y = err_y + dw1 * C_W1_Y_CROSS + dw2 * C_W2_Y
     return new_x, new_y
 
 
-# ── NEW algorithm (single-axis, wrist_1 for Y) ───────────────────────────────
-
-def _new_centering_step(err_x, err_y, pan, w1):
-    """One tick of the fixed algorithm. Returns updated (pan, w1, dpan, dw1)."""
-    old_pan, old_w1 = pan, w1
-    if abs(err_x) >= abs(err_y):
-        pan -= err_x * PAN_GAIN
-    else:
-        w1 += err_y * WRIST1_GAIN
-    pan = max(-math.pi, min(math.pi, pan))
-    w1  = max(-2.5, min(-0.8, w1))
-    return pan, w1, pan - old_pan, w1 - old_w1
+def world_step_old(err_x, err_y, dpan, dlift, c_lift_x_cross):
+    """Shoulder_lift + pan world model (old algorithm).
+    Large X cross-coupling from shoulder_lift causes runaway."""
+    C_PAN_X       = 2.00
+    C_PAN_Y_CROSS = 0.10
+    new_x = err_x + dpan * C_PAN_X - dlift * c_lift_x_cross
+    new_y = err_y - dlift * C_JY_Y + dpan * C_PAN_Y_CROSS
+    return new_x, new_y
 
 
-def run_new(cx, cy, pan0=0.60, w1_0=-1.80):
+# ── NEW algorithm (dual-axis: wrist_1 for X, wrist_2 for Y) ──────────────────
+
+def _new_centering_step(err_x, err_y, w1, w2):
+    """One tick. Returns updated (w1, w2, dw1, dw2)."""
+    old_w1, old_w2 = w1, w2
+    w1 -= err_x * WRIST1_GAIN   # dw1 < 0 for weed-right → X decreases
+    w2 -= err_y * WRIST2_GAIN   # dw2 < 0 for weed-below → Y decreases
+    w1 = max(-2.5, min(-0.8, w1))
+    w2 = max(-2.5, min(-0.5, w2))
+    return w1, w2, w1 - old_w1, w2 - old_w2
+
+
+def run_new(cx, cy, w1_0=-1.80, w2_0=-1.57):
     """Simulate the new centering loop. Returns (converged, steps, history)."""
     err_x, err_y = _pix_to_err(cx, cy)
-    pan, w1 = pan0, w1_0
+    w1, w2 = w1_0, w2_0
     history = [{'step': 0, 'err_x': err_x, 'err_y': err_y,
-                'mag': math.hypot(err_x, err_y), 'pan': pan, 'w1': w1}]
+                'mag': math.hypot(err_x, err_y), 'w1': w1, 'w2': w2}]
 
     for step in range(1, MAX_STEPS + 1):
-        if abs(err_x) < FIRE_ZONE_FRAC and abs(err_y) < FIRE_ZONE_FRAC:
+        if math.hypot(err_x, err_y) < FIRE_ZONE_FRAC:
             return True, step - 1, history
-        pan, w1, dpan, dw1 = _new_centering_step(err_x, err_y, pan, w1)
-        err_x, err_y = world_step(err_x, err_y, dpan, dw1, C_JY_X_NEW)
+        w1, w2, dw1, dw2 = _new_centering_step(err_x, err_y, w1, w2)
+        err_x, err_y = world_step(err_x, err_y, dw1, dw2)
         history.append({'step': step, 'err_x': err_x, 'err_y': err_y,
-                        'mag': math.hypot(err_x, err_y), 'pan': pan, 'w1': w1})
+                        'mag': math.hypot(err_x, err_y), 'w1': w1, 'w2': w2})
 
     return False, MAX_STEPS, history
 
@@ -109,11 +129,11 @@ def run_old(cx, cy, pan0=0.60, lift0=-1.20):
     history = [{'step': 0, 'err_x': err_x, 'err_y': err_y}]
 
     for step in range(1, MAX_STEPS + 1):
-        if abs(err_x) < FIRE_ZONE_FRAC and abs(err_y) < FIRE_ZONE_FRAC:
+        if math.hypot(err_x, err_y) < FIRE_ZONE_FRAC:
             return True, step - 1, history
         dpan  = -err_x * OLD_PAN_GAIN
         dlift = -err_y * OLD_LIFT_GAIN
-        err_x, err_y = world_step(err_x, err_y, dpan, dlift, C_JY_X_OLD)
+        err_x, err_y = world_step_old(err_x, err_y, dpan, dlift, C_JY_X_OLD)
         history.append({'step': step, 'err_x': err_x, 'err_y': err_y})
 
     return False, MAX_STEPS, history
@@ -240,48 +260,47 @@ class TestOldAlgorithmDiverges:
 # AXIS-SELECTION LOGIC
 # ═════════════════════════════════════════════════════════════════════════════
 
-class TestSingleAxisSelection:
-    """Verify the dominant-axis decision at the algorithmic level."""
+class TestDualAxisCorrection:
+    """Verify the dual-axis wrist_1+wrist_2 correction directions and ranges."""
 
-    def test_large_y_selects_wrist1(self):
-        """When |err_y| > |err_x|, only wrist_1 should change."""
-        pan0, w1_0 = 0.60, -1.80
-        pan1, w1_1, dpan, dw1 = _new_centering_step(0.05, 0.70, pan0, w1_0)
-        assert dpan == 0.0,  f"Expected no pan change when Y dominates, got dpan={dpan}"
-        assert dw1  != 0.0,  "Expected wrist_1 to move when Y dominates"
+    def test_both_axes_corrected_each_step(self):
+        """Both wrist_1 and wrist_2 move every step (dual-axis, not single)."""
+        w1, w2, dw1, dw2 = _new_centering_step(0.50, 0.70, -1.80, -1.57)
+        assert dw1 != 0.0, "wrist_1 should move when err_x != 0"
+        assert dw2 != 0.0, "wrist_2 should move when err_y != 0"
 
-    def test_large_x_selects_pan(self):
-        """When |err_x| > |err_y|, only shoulder_pan should change."""
-        pan0, w1_0 = 0.60, -1.80
-        pan1, w1_1, dpan, dw1 = _new_centering_step(0.60, 0.10, pan0, w1_0)
-        assert dw1  == 0.0,  f"Expected no wrist_1 change when X dominates, got dw1={dw1}"
-        assert dpan != 0.0,  "Expected shoulder_pan to move when X dominates"
+    def test_wrist1_direction_positive_x(self):
+        """Positive err_x (weed right) → wrist_1 decreases."""
+        w1, _, dw1, _ = _new_centering_step(0.50, 0.0, -1.80, -1.57)
+        assert dw1 < 0, f"Expected wrist_1 to decrease for positive X error, got {dw1}"
 
-    def test_equal_error_selects_pan(self):
-        """When |err_x| == |err_y|, X wins (tie-break in code: >=)."""
-        pan0, w1_0 = 0.60, -1.80
-        pan1, w1_1, dpan, dw1 = _new_centering_step(0.30, 0.30, pan0, w1_0)
-        assert dw1  == 0.0 and dpan != 0.0, "Tie should select shoulder_pan"
+    def test_wrist1_direction_negative_x(self):
+        """Negative err_x (weed left) → wrist_1 increases."""
+        w1, _, dw1, _ = _new_centering_step(-0.50, 0.0, -1.80, -1.57)
+        assert dw1 > 0, f"Expected wrist_1 to increase for negative X error, got {dw1}"
 
-    def test_wrist1_correction_direction_positive_y(self):
-        """Positive err_y (weed below centre) → wrist_1 increases."""
-        _, w1_1, _, dw1 = _new_centering_step(0.0, 0.50, 0.0, -1.80)
-        assert dw1 > 0, f"Expected wrist_1 to increase for positive Y error, got {dw1}"
+    def test_wrist2_direction_positive_y(self):
+        """Positive err_y (weed below centre) → wrist_2 decreases."""
+        _, w2, _, dw2 = _new_centering_step(0.0, 0.70, -1.80, -1.57)
+        assert dw2 < 0, f"Expected wrist_2 to decrease for positive Y error, got {dw2}"
 
-    def test_wrist1_correction_direction_negative_y(self):
-        """Negative err_y (weed above centre) → wrist_1 decreases."""
-        _, w1_1, _, dw1 = _new_centering_step(0.0, -0.50, 0.0, -1.80)
-        assert dw1 < 0, f"Expected wrist_1 to decrease for negative Y error, got {dw1}"
+    def test_wrist2_direction_negative_y(self):
+        """Negative err_y (weed above centre) → wrist_2 increases."""
+        _, w2, _, dw2 = _new_centering_step(0.0, -0.70, -1.80, -1.57)
+        assert dw2 > 0, f"Expected wrist_2 to increase for negative Y error, got {dw2}"
 
-    def test_pan_correction_direction(self):
-        """Positive err_x (weed right) → shoulder_pan decreases."""
-        pan1, _, dpan, _ = _new_centering_step(0.40, 0.0, 0.60, -1.80)
-        assert dpan < 0, f"Expected pan to decrease for positive X error, got {dpan}"
-
-    def test_wrist1_clamped_to_range(self):
+    def test_wrist1_clamped(self):
         """wrist_1 must stay within [-2.5, -0.8]."""
+        for err_x in [1.0, -1.0, 5.0, -5.0]:
+            w1_out, _, _, _ = _new_centering_step(err_x, 0.0, -2.5, -1.57)
+            assert -2.5 <= w1_out <= -0.8, f"wrist_1={w1_out} out of range"
+            w1_out, _, _, _ = _new_centering_step(err_x, 0.0, -0.8, -1.57)
+            assert -2.5 <= w1_out <= -0.8, f"wrist_1={w1_out} out of range"
+
+    def test_wrist2_clamped(self):
+        """wrist_2 must stay within [-2.5, -0.5]."""
         for err_y in [1.0, -1.0, 5.0, -5.0]:
-            for w1_init in [-0.8, -1.8, -2.5]:
-                _, w1_out, _, _ = _new_centering_step(0.0, err_y, 0.0, w1_init)
-                assert -2.5 <= w1_out <= -0.8, (
-                    f"wrist_1={w1_out} out of range for err_y={err_y}, init={w1_init}")
+            _, w2_out, _, _ = _new_centering_step(0.0, err_y, -1.80, -2.5)
+            assert -2.5 <= w2_out <= -0.5, f"wrist_2={w2_out} out of range"
+            _, w2_out, _, _ = _new_centering_step(0.0, err_y, -1.80, -0.5)
+            assert -2.5 <= w2_out <= -0.5, f"wrist_2={w2_out} out of range"

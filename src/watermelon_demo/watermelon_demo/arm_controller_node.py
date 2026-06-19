@@ -19,6 +19,7 @@ Action client:
 """
 
 import math
+import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
@@ -27,6 +28,7 @@ from vision_msgs.msg import Detection2DArray
 from control_msgs.action import FollowJointTrajectory
 from trajectory_msgs.msg import JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
+from tf2_ros import Buffer, TransformListener
 
 
 JOINT_NAMES = [
@@ -55,14 +57,34 @@ WEED_LOCK_TIMEOUT = 8.0  # s to keep chasing a weed before giving up
 
 IMAGE_W = 640
 IMAGE_H = 480
-PAN_GAIN    = 0.10  # rad per normalised pixel error (shoulder_pan drives image X)
-WRIST1_GAIN = 0.12  # rad per normalised pixel error (wrist_1 drives image Y)
+
+# Camera intrinsics — must match Gazebo camera plugin (horizontal_fov=1.047).
+# camera_link frame: +X = optical axis, -Y = image right, -Z = image down.
+_HFOV = 1.047
+_FX = (IMAGE_W / 2) / math.tan(_HFOV / 2)
+_FY = _FX
+_CX_OPT = IMAGE_W / 2.0
+_CY_OPT = IMAGE_H / 2.0
+_WEED_Z = 0.03   # weed top height in world frame (m)
+
+# World-space exclusion radius around each treated weed.  Adjacent weeds are
+# ~0.30 m apart in this field; 0.20 m catches the same weed from any scan
+# angle without blacklisting live neighbours.
+TREATED_WORLD_DIST = 0.20   # metres
+
+# Centering gains.
+# Empirically (from logs): wrist_1 at wrist_2=-π/2 moves image X with ~0.12/rad
+# Y cross-coupling, while wrist_2 moves image Y with near-zero X cross-coupling.
+# This makes them an orthogonal pair — both axes can be corrected simultaneously
+# without the runaway coupling that shoulder_pan caused (pan had ~4.7/rad Y leak).
+WRIST1_GAIN = 0.08  # rad per normalised pixel error (wrist_1 drives image X)
+WRIST2_GAIN = 0.10  # rad per normalised pixel error (wrist_2 drives image Y)
 FIRE_ZONE_FRAC = 0.20  # weed within 20% of image centre → good enough, fire
 
-# Dead-weed suppression: ignore detections at scan positions within this many
-# radians of a pan angle where we already fired.  Covers ~1.5 PAN_STEPs so
-# the same weed can't be re-detected from adjacent scan poses either.
-TREATED_ZONE_RAD = 0.25
+# Dead-weed suppression: ignore detections within this many radians of a treated
+# weed's pan angle.  0.35 covers ~2.3 PAN_STEPs, handling the same weed visible
+# from two adjacent scan positions.
+TREATED_ZONE_RAD = 0.35
 
 WEED_CLASS_IDS = {'1', '2'}   # weed_side, weed_top
 
@@ -85,6 +107,9 @@ class ArmControllerNode(Node):
         self.declare_parameter('scan_dwell_time', 2.0)
         self.declare_parameter('laser_fire_duration', 1.0)
 
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
+
         self._action = ActionClient(
             self, FollowJointTrajectory,
             '/scaled_joint_trajectory_controller/follow_joint_trajectory')
@@ -101,6 +126,7 @@ class ArmControllerNode(Node):
         self._fire_start = 0.0       # sim time the laser turned on
         self._lock_start = 0.0       # sim time we locked onto a weed
         self._treated_pans = []      # shoulder_pan angles where laser already fired
+        self._treated_world_xy = []  # (x, y) world positions of treated weeds
 
         self._timer = self.create_timer(0.1, self._tick)
 
@@ -155,10 +181,21 @@ class ArmControllerNode(Node):
             # Look for a weed; if none appears within scan_dwell_time, sweep on
             # to the next scan pose instead of stalling here forever.
             if self._last_weed_det is not None:
-                self.get_logger().info(
-                    f'Weed spotted at pixel {self._last_weed_det} — centering')
-                self._lock_start = self._now()
-                self._state = State.MOVE_TO_WEED
+                cx, cy = self._last_weed_det
+                wxy = self._pixel_to_world_xy(cx, cy)
+                if wxy is not None and any(
+                    math.hypot(wxy[0] - tx, wxy[1] - ty) < TREATED_WORLD_DIST
+                    for tx, ty in self._treated_world_xy
+                ):
+                    self.get_logger().info(
+                        f'Skip detection px=({cx},{cy}): world pos '
+                        f'({wxy[0]:.2f},{wxy[1]:.2f}) matches treated weed')
+                    self._state = State.SCAN_MOVE
+                else:
+                    self.get_logger().info(
+                        f'Weed spotted at pixel {self._last_weed_det} — centering')
+                    self._lock_start = self._now()
+                    self._state = State.MOVE_TO_WEED
             elif self._now() - self._wait_start > \
                     self.get_parameter('scan_dwell_time').value:
                 self._state = State.SCAN_MOVE
@@ -175,26 +212,30 @@ class ArmControllerNode(Node):
             err_x = (cx - IMAGE_W / 2) / (IMAGE_W / 2)
             err_y = (cy - IMAGE_H / 2) / (IMAGE_H / 2)
 
-            # Weed is under the camera -> stop and fire.
-            if abs(err_x) < FIRE_ZONE_FRAC and abs(err_y) < FIRE_ZONE_FRAC:
+            # Fresh detection — reset loss-timer so active centering moves don't
+            # drain the timeout budget (each 1-s move would otherwise eat into 8 s).
+            self._lock_start = self._now()
+
+            # Weed is under the camera → fire.  Use circular threshold to avoid
+            # firing 41% off-axis when the weed sits in a corner of the square zone.
+            if math.hypot(err_x, err_y) < FIRE_ZONE_FRAC:
                 self._state = State.FIRE_LASER
                 return
 
             corrected = list(self._current_joints)
-            # Correct only the dominant-error axis per step.  Applying X and Y
-            # simultaneously causes runaway: the shoulder_pan arc shifts image Y
-            # which fights the wrist_1 correction, which shifts X — coupled loop.
-            if abs(err_x) >= abs(err_y):
-                corrected[0] -= err_x * PAN_GAIN
-                axis = f'X→pan={corrected[0]:+.3f}'
-            else:
-                corrected[3] += err_y * WRIST1_GAIN
-                axis = f'Y→w1={corrected[3]:+.3f}'
-            corrected[0] = max(-math.pi, min(math.pi, corrected[0]))
+            # Correct both axes simultaneously: wrist_1 for X, wrist_2 for Y.
+            # These two joints are nearly orthogonal — wrist_1 barely shifts image
+            # Y and wrist_2 barely shifts image X, so simultaneous correction
+            # converges without the cross-axis runaway that shoulder_pan caused.
+            corrected[3] -= err_x * WRIST1_GAIN
+            corrected[4] -= err_y * WRIST2_GAIN
             corrected[3] = max(-2.5, min(-0.8, corrected[3]))
+            # wrist_2 scan pose is -1.57; allow ±0.57 rad for centering range
+            # while keeping the joint well clear of singularity/collision territory.
+            corrected[4] = max(-2.14, min(-1.00, corrected[4]))
             self.get_logger().info(
                 f'Centering: weed px=({cx},{cy}) err=({err_x:+.2f},{err_y:+.2f}) '
-                f'correcting {axis}')
+                f'w1={corrected[3]:+.3f} w2={corrected[4]:+.3f}')
             self._move_to(corrected, duration_sec=WEED_MOVE_TIME,
                           on_done=lambda: None)
 
@@ -210,12 +251,60 @@ class ArmControllerNode(Node):
                 self._fire_pub.publish(Bool(data=False))
                 fired_pan = self._current_joints[0]
                 self._treated_pans.append(fired_pan)
+                if self._last_weed_det is not None:
+                    wxy = self._pixel_to_world_xy(*self._last_weed_det)
+                    if wxy is not None:
+                        self._treated_world_xy.append(wxy)
+                        self.get_logger().info(
+                            f'Treated weed world pos: ({wxy[0]:.2f},{wxy[1]:.2f})')
                 self.get_logger().info(
                     f'Weed treated — pan={fired_pan:+.2f} blacklisted '
                     f'(total treated: {len(self._treated_pans)}). Resuming scan.')
                 self._state = State.SCAN_MOVE
 
+    # ------------------------------------------------------------------ #
+    #  Geometry helpers                                                    #
+    # ------------------------------------------------------------------ #
+
+    def _pixel_to_world_xy(self, cx, cy):
+        """Project image pixel to world XY on the weed ground plane. Returns (x,y) or None."""
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                'world', 'camera_link', rclpy.time.Time())
+        except Exception:
+            return None
+        t = tf.transform.translation
+        q = tf.transform.rotation
+        R = self._quat_to_matrix(q.x, q.y, q.z, q.w)
+        ray_cam = np.array([1.0, -(cx - _CX_OPT) / _FX, -(cy - _CY_OPT) / _FY])
+        ray_world = R @ ray_cam
+        origin = np.array([t.x, t.y, t.z])
+        if abs(ray_world[2]) < 1e-6:
+            return None
+        lam = (_WEED_Z - origin[2]) / ray_world[2]
+        if lam < 0:
+            return None
+        pt = origin + lam * ray_world
+        return (float(pt[0]), float(pt[1]))
+
+    @staticmethod
+    def _quat_to_matrix(x, y, z, w):
+        return np.array([
+            [1 - 2*(y*y + z*z),   2*(x*y - z*w),   2*(x*z + y*w)],
+            [  2*(x*y + z*w), 1 - 2*(x*x + z*z),   2*(y*z - x*w)],
+            [  2*(x*z - y*w),     2*(y*z + x*w), 1 - 2*(x*x + y*y)],
+        ])
+
     def _enter_waiting(self):
+        # Skip this scan position if we already treated a weed nearby.
+        current_pan = self._current_joints[0]
+        for treated in self._treated_pans:
+            if abs(current_pan - treated) < TREATED_ZONE_RAD:
+                self.get_logger().info(
+                    f'Skip scan pos pan={current_pan:+.2f} — already treated '
+                    f'weed at pan={treated:+.2f}')
+                self._state = State.SCAN_MOVE
+                return
         self._last_weed_det = None
         self._wait_start = self._now()
         self._state = State.WAITING
@@ -241,7 +330,10 @@ class ArmControllerNode(Node):
         goal.trajectory.points = [pt]
 
         self._busy = True
-        self._current_joints = list(joints)
+        # _current_joints is updated only after the controller accepts the goal.
+        # Writing it before acceptance created ghost state: a rejected goal left
+        # the joints at the intended-but-never-executed pose, and the next
+        # correction step compounded the error from that phantom position.
 
         def _result_cb(future):
             self._busy = False
@@ -254,6 +346,7 @@ class ArmControllerNode(Node):
                 self.get_logger().warn('Trajectory goal REJECTED by controller')
                 self._busy = False
                 return
+            self._current_joints = list(joints)   # commit only on acceptance
             goal_handle.get_result_async().add_done_callback(_result_cb)
 
         self._action.send_goal_async(goal).add_done_callback(_goal_response)
