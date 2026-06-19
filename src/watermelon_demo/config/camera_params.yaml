@@ -1,0 +1,31 @@
+# camera_params.yaml — RealSense D435 mount geometry on the UR5 tool0 flange.
+#
+# HOW TO MEASURE (arm at HOME pose, use calipers):
+#
+#   x: lateral offset from flange centre — positive = camera shifted right
+#   y: vertical offset from flange centre — positive = camera shifted down
+#   z: distance from flange face to camera lens — positive = camera sticks forward (~5 cm typical)
+#
+#   roll:  rotation around the forward (Z) axis — usually 0
+#   pitch: tilt toward the ground — positive = camera angled down toward field
+#   yaw:   left/right rotation — usually 0
+#
+# All distances in metres, all angles in radians.
+# Fill in these values before running demo_real.launch.py.
+
+mount:
+  x:     0.00    # TODO: measure
+  y:     0.00    # TODO: measure
+  z:     0.05    # TODO: measure (rough estimate: 5 cm)
+  roll:  0.00    # TODO: measure
+  pitch: 0.00    # TODO: measure
+  yaw:   0.00    # TODO: measure
+
+# RealSense D435 typical intrinsics at 640x480 — for reference only.
+# The node reads live values from /camera/color/camera_info automatically.
+# You do NOT need to edit these — they are overwritten at runtime.
+intrinsics_reference:
+  fx: 615.0   # typical D435 value at 640x480
+  fy: 615.0
+  cx: 320.0
+  cy: 240.0

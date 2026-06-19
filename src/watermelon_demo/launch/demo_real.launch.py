@@ -12,6 +12,7 @@ Before running:
 """
 
 import os
+import yaml
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, TimerAction
 from launch.substitutions import LaunchConfiguration
@@ -21,16 +22,19 @@ from ament_index_python.packages import get_package_share_directory
 # ── Robot IP ────────────────────────────────────────────────────────────────
 DEFAULT_ROBOT_IP = '192.168.1.100'
 
-# ── Camera mount geometry — MEASURE FROM PHYSICAL SETUP ─────────────────────
-# Offset from UR5 tool0 frame origin to RealSense D435 optical centre (metres).
-# RealSense optical frame: +Z forward, +X right, +Y down.
-# UR5 tool0 frame: +Z out of flange face, +X forward.
-CAMERA_X   = 0.00   # TODO: measure lateral offset (m)
-CAMERA_Y   = 0.00   # TODO: measure vertical offset (m)
-CAMERA_Z   = 0.05   # TODO: measure flange-to-lens distance (m) — ~5 cm typical
-CAMERA_ROLL  = 0.0  # TODO: measure (rad)
-CAMERA_PITCH = 0.0  # TODO: measure (rad)
-CAMERA_YAW   = 0.0  # TODO: measure (rad)
+# ── Camera mount geometry — loaded from config/camera_params.yaml ────────────
+# Edit that file (not this one) before running on the physical robot.
+_cam_cfg_path = os.path.join(
+    os.path.dirname(__file__), '..', 'config', 'camera_params.yaml')
+with open(_cam_cfg_path) as _f:
+    _cam = yaml.safe_load(_f)['mount']
+
+CAMERA_X     = float(_cam['x'])
+CAMERA_Y     = float(_cam['y'])
+CAMERA_Z     = float(_cam['z'])
+CAMERA_ROLL  = float(_cam['roll'])
+CAMERA_PITCH = float(_cam['pitch'])
+CAMERA_YAW   = float(_cam['yaw'])
 
 
 def generate_launch_description():
