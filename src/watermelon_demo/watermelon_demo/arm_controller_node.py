@@ -106,6 +106,7 @@ class ArmControllerNode(Node):
 
         self.declare_parameter('scan_dwell_time', 2.0)
         self.declare_parameter('laser_fire_duration', 1.0)
+        self.declare_parameter('dry_run', False)
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -240,10 +241,15 @@ class ArmControllerNode(Node):
                           on_done=lambda: None)
 
         elif self._state == State.FIRE_LASER:
-            self.get_logger().info('Firing laser at weed')
-            self._fire_pub.publish(Bool(data=True))
-            self._fire_start = self._now()
-            self._state = State.FIRING
+            if self.get_parameter('dry_run').value:
+                self.get_logger().info(
+                    'DRY RUN: weed centred — would fire laser here')
+                self._state = State.SCAN_MOVE
+            else:
+                self.get_logger().info('Firing laser at weed')
+                self._fire_pub.publish(Bool(data=True))
+                self._fire_start = self._now()
+                self._state = State.FIRING
 
         elif self._state == State.FIRING:
             if self._now() - self._fire_start > \
