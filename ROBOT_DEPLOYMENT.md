@@ -1,69 +1,71 @@
 # Robot Deployment Checklist — UR5 + RealSense D435
 
+---
+
 ## 1. Install ROS packages on the robot PC
 
 ```bash
 sudo apt install ros-jazzy-ur-robot-driver \
                  ros-jazzy-realsense2-camera \
                  ros-jazzy-image-view \
-                 ros-jazzy-aruco-opencv   # needed for hand-eye calibration
+                 ros-jazzy-aruco-opencv   # needed for easy_handeye2 calibration
 ```
+
+---
 
 ## 2. Copy / build the project
 
-Since you are copying from your dev machine (not cloning from git),
-copy the entire `ros2_ws/src/` directory (includes `watermelon_demo` **and**
-`easy_handeye2` submodule which is already checked out locally):
+Copy the entire `ros2_ws/src/` directory from your dev machine to the robot PC.
+It already includes `watermelon_demo` and the `easy_handeye2` submodule.
 
 ```bash
 # On the robot PC:
 mkdir -p ~/ros2_ws
-# Copy src/ from dev machine, then:
+# (copy src/ from dev machine here)
 cd ~/ros2_ws
-rosdep install -iyr --from-paths src   # installs easy_handeye2 deps too
+rosdep install -iyr --from-paths src
 colcon build --packages-select watermelon_demo easy_handeye2
 source install/setup.bash
 ```
 
-## 3. Camera calibration (easy_handeye2) — recommended before demo
+---
 
-This gives you the exact `tool0 → camera_link` transform automatically.
-Much more accurate than measuring with calipers.
+## 3. Camera mount calibration — choose one option
 
-### 3a. easy_handeye2 is already included
+You must tell the system where the RealSense D435 sits relative to the UR5
+`tool0` flange. Two options — **Option A is more accurate**.
 
-`easy_handeye2` is a git submodule in this repo — it was copied along with `src/`.
-It was built in step 2. Nothing extra to install.
+---
 
-### 3b. Print and place the ArUco marker
+### Option A: easy_handeye2 (recommended — automatic, accurate)
 
-Print an ArUco marker (ID 0, dictionary DICT_4X4_50) on A4 paper.
-Place it on the ground/table in front of the robot — it must be visible
-from multiple arm poses.
+#### A1. Print and place the ArUco marker
+
+Print an ArUco marker (ID 0, dictionary DICT_4X4_50) and place it flat on the
+ground in front of the robot where it will be visible from multiple arm poses.
 
 ```bash
-# Generate marker image:
 python3 -c "
 import cv2, cv2.aruco as aruco
 d = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
 img = aruco.generateImageMarker(d, 0, 200)
 cv2.imwrite('/tmp/aruco_marker.png', img)
-print('Saved to /tmp/aruco_marker.png')
+print('Print: /tmp/aruco_marker.png')
 "
 ```
 
-### 3c. Run the calibration
+#### A2. Run the calibration (3 terminals)
 
 ```bash
-# Terminal 1 — start the UR5 driver
+# Terminal 1 — UR5 driver
 ros2 launch ur_robot_driver ur_control.launch.py \
     ur_type:=ur5 robot_ip:=<ur5_ip>
 
-# Terminal 2 — start RealSense camera
+# Terminal 2 — RealSense camera
 ros2 launch realsense2_camera rs_launch.py \
     enable_color:=true enable_depth:=false
 
-# Terminal 3 — run easy_handeye2 (eye-in-hand: camera on end-effector)
+# Terminal 3 — easy_handeye2 (eye-in-hand: camera on end-effector)
 ros2 launch easy_handeye2 calibrate.launch.py \
     eye_on_hand:=true \
     robot_base_frame:=base \
@@ -72,11 +74,11 @@ ros2 launch easy_handeye2 calibrate.launch.py \
     tracking_marker_frame:=aruco_marker_frame
 ```
 
-Move the arm to 8–12 different poses (GUI guides you), then click **Compute**.
+Move the arm to **8–12 different poses** using the GUI, then click **Compute**.
 
-### 3d. Paste result into camera_params.yaml
+#### A3. Paste result into camera_params.yaml
 
-The calibration output looks like:
+The output looks like:
 ```
 x: 0.034  y: -0.012  z: 0.058
 qx: 0.012  qy: -0.706  qz: 0.008  qw: 0.708
@@ -85,54 +87,153 @@ qx: 0.012  qy: -0.706  qz: 0.008  qw: 0.708
 Open `src/watermelon_demo/config/camera_params.yaml` and fill in:
 
 ```yaml
-calibrated: true        # ← change this to true
+calibrated: true        # ← set to true
 
 mount:
-  x:  0.034             # ← paste your values
+  x:  0.034             # ← from calibration output
   y: -0.012
   z:  0.058
   roll:  0.0            # ignored when calibrated: true
   pitch: 0.0
   yaw:   0.0
-  qx:  0.012            # ← paste quaternion from easy_handeye2
+  qx:  0.012            # ← quaternion from easy_handeye2
   qy: -0.706
   qz:  0.008
   qw:  0.708
 ```
 
-Then rebuild:
+#### A4. Validate and run tests
+
 ```bash
-cd ~/ros2_ws && colcon build --packages-select watermelon_demo && source install/setup.bash
+cd ~/ros2_ws && source install/setup.bash
+
+# Quick visual check — must print green "✓ All checks passed":
+python3 scripts/check_camera_params.py
+
+# Full test suite for calibrated mode (quaternion path):
+python3 -m pytest src/watermelon_demo/test/test_manual_calibration.py \
+                  src/watermelon_demo/test/test_camera_tf.py -v
 ```
 
-### 3e. (Alternative) Manual measurement — no calibration tool
+**Expected results:**
+- `TestTranslationSanity` — 4 passed
+- `TestRPYSanity` — 4 skipped (calibrated=true, RPY not used)
+- `TestQuaternionSanity` — 3 passed (unit-norm, not identity, qw≠0)
+- `TestCalibrationModeSwitch::test_calibrated_mode_uses_quaternion_args` — passed
+- `TestCameraParamsYaml` — 5 passed
 
-If you don't have time for calibration, fill in only x/y/z from calipers
-and leave `calibrated: false`. The centering loop still works; only the
-RViz beam arrow and world-space dead-zone will be slightly off.
+Then rebuild so the launch file picks up the new values:
+```bash
+colcon build --packages-select watermelon_demo && source install/setup.bash
+```
+
+---
+
+### Option B: Manual measurement with calipers (fallback — no calibration tool needed)
+
+Use this if easy_handeye2 can't run (no MoveIt, no marker detection, time pressure).
+The centering loop still works correctly. Only the RViz laser beam arrow and the
+world-space dead-zone suppression will have small errors proportional to measurement accuracy.
+
+#### B1. What to measure (arm at HOME pose)
+
+Use calipers or a ruler. The UR5 `tool0` frame has **+Z pointing out of the flange face**.
+
+| Value | What to measure | Typical range |
+|---|---|---|
+| `z` | Distance from flange face centre to camera lens | 0.04 – 0.08 m |
+| `x` | Lateral offset (left/right) from flange centre | ±0.05 m |
+| `y` | Vertical offset (up/down) from flange centre | ±0.05 m |
+| `pitch` | Downward tilt angle of camera (rad) | 0 if mounted straight |
+| `roll` | Side tilt (rad) | 0 if mounted straight |
+| `yaw` | Left/right rotation (rad) | 0 if mounted straight |
+
+> **Angles are in radians.** To convert: `radians = degrees × π/180`.
+> Example: 10° downward tilt = 0.175 rad.
+
+#### B2. Fill in camera_params.yaml
+
+Open `src/watermelon_demo/config/camera_params.yaml`:
 
 ```yaml
-calibrated: false
+calibrated: false       # ← keep false for manual measurement
+
 mount:
-  x:  0.00   # lateral offset left/right (m)
-  y:  0.00   # up/down offset (m)
-  z:  0.05   # flange → lens distance, typically 4–8 cm
-  roll:  0.0
-  pitch: 0.0
-  yaw:   0.0
+  x:  0.00    # ← measured lateral offset (m)
+  y:  0.00    # ← measured vertical offset (m)
+  z:  0.06    # ← measured flange-to-lens distance (m)  ← MUST NOT BE 0
+  roll:  0.00 # ← measured (rad), 0 if straight
+  pitch: 0.00 # ← measured (rad), 0 if straight
+  yaw:   0.00 # ← measured (rad), 0 if straight
+  qx: 0.0     # leave as-is (unused when calibrated: false)
+  qy: 0.0
+  qz: 0.0
+  qw: 1.0
 ```
 
-## 4. YOLO model (optional)
+#### B3. Validate and run tests
+
+```bash
+cd ~/ros2_ws && source install/setup.bash
+
+# Quick visual check — must print green "✓ All checks passed":
+python3 scripts/check_camera_params.py
+
+# Full test suite for manual mode (RPY path):
+python3 -m pytest src/watermelon_demo/test/test_manual_calibration.py \
+                  src/watermelon_demo/test/test_camera_tf.py -v
+```
+
+**Expected results:**
+- `TestTranslationSanity` — 4 passed (z≠0, z in range, x/y in range)
+- `TestRPYSanity` — 3 passed + 1 xfail (xfail = warning that RPY is all-zero, safe to ignore if camera is straight)
+- `TestQuaternionSanity` — 3 skipped (calibrated=false, quaternion not used)
+- `TestCalibrationModeSwitch::test_uncalibrated_mode_uses_rpy_args` — passed
+- `TestCameraParamsYaml` — 5 passed
+
+**If `test_z_filled_in` fails:** `z` is still 0 — go back and measure the flange-to-lens distance.
+
+**If `test_rpy_not_all_placeholder` is XFAIL:** all angles are 0. This is fine if the camera is mounted perfectly straight. If it's visibly tilted, measure the tilt angle.
+
+Then rebuild:
+```bash
+colcon build --packages-select watermelon_demo && source install/setup.bash
+```
+
+---
+
+## 4. Run all camera tests at once
+
+After filling in `camera_params.yaml` (either option), run the full camera test suite:
+
+```bash
+cd ~/ros2_ws && source install/setup.bash
+python3 -m pytest \
+    src/watermelon_demo/test/test_camera_tf.py \
+    src/watermelon_demo/test/test_manual_calibration.py \
+    src/watermelon_demo/test/test_camera_intrinsics.py \
+    -v
+```
+
+All tests should pass (or skip/xfail as noted above). No hard failures allowed before launching.
+
+---
+
+## 5. YOLO model (optional)
 
 Place `best.pt` at `/home/lior/best.pt`.
 Without it, add `use_real_model:=false` to fall back to the HSV colour stub.
 
-## 5. Find the robot IP
+---
+
+## 6. Find the robot IP
 
 UR5 teach pendant → Settings → System → Network.
 Default in launch file: `192.168.1.100`.
 
-## 6. Launch
+---
+
+## 7. Launch
 
 ```bash
 # Detection-only (arm centres over weeds, never fires) — safe default:
@@ -149,12 +250,3 @@ ros2 launch watermelon_demo demo_real.launch.py \
 ```
 
 A live annotated camera window opens automatically. RViz shows 3D field markers.
-
-## 7. Verify tests pass after filling in camera_params.yaml
-
-```bash
-cd ~/ros2_ws && source install/setup.bash
-python3 -m pytest src/watermelon_demo/test/test_camera_tf.py -v
-```
-
-All 10 tests should pass. If `test_camera_z_positive` fails, z is still 0 — measure it.
