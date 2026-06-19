@@ -23,6 +23,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
+from sensor_msgs.msg import CameraInfo, JointState
 from std_msgs.msg import Bool
 from vision_msgs.msg import Detection2DArray
 from control_msgs.action import FollowJointTrajectory
@@ -58,8 +59,8 @@ WEED_LOCK_TIMEOUT = 8.0  # s to keep chasing a weed before giving up
 IMAGE_W = 640
 IMAGE_H = 480
 
-# Camera intrinsics — must match Gazebo camera plugin (horizontal_fov=1.047).
-# camera_link frame: +X = optical axis, -Y = image right, -Z = image down.
+# Gazebo camera intrinsics (horizontal_fov=1.047) — used as fallback until a
+# live CameraInfo message arrives from the real RealSense.
 _HFOV = 1.047
 _FX = (IMAGE_W / 2) / math.tan(_HFOV / 2)
 _FY = _FX
@@ -118,6 +119,17 @@ class ArmControllerNode(Node):
         self._det_sub = self.create_subscription(
             Detection2DArray, '/detections', self._detection_cb, 10)
 
+        # Live camera intrinsics — updated once from CameraInfo, then unsubscribed.
+        # Falls back to Gazebo defaults if the topic never arrives (simulation mode).
+        self._intrinsics = (_FX, _FY, _CX_OPT, _CY_OPT)
+        self._info_sub = self.create_subscription(
+            CameraInfo, '/camera/color/camera_info', self._camera_info_cb, 1)
+
+        # Real joint positions from hardware — continuously overwrites the
+        # dead-reckoned value so centering corrections start from the true pose.
+        self.create_subscription(
+            JointState, '/joint_states', self._joint_state_cb, 10)
+
         self._state = State.INIT
         self._scan_idx = 0
         self._current_joints = list(HOME_POSE)
@@ -149,6 +161,23 @@ class ArmControllerNode(Node):
                         best = (int(det.bbox.center.position.x),
                                 int(det.bbox.center.position.y))
         self._last_weed_det = best
+
+    def _camera_info_cb(self, msg: CameraInfo):
+        if len(msg.k) < 6 or msg.k[0] == 0.0:
+            self.get_logger().warn('Ignoring degenerate CameraInfo (k too short or fx=0)')
+            return
+        self._intrinsics = (msg.k[0], msg.k[4], msg.k[2], msg.k[5])
+        self.get_logger().info(
+            f'Camera intrinsics: fx={msg.k[0]:.1f} fy={msg.k[4]:.1f} '
+            f'cx={msg.k[2]:.1f} cy={msg.k[5]:.1f}')
+        self.destroy_subscription(self._info_sub)
+
+    def _joint_state_cb(self, msg: JointState):
+        pos_by_name = dict(zip(msg.name, msg.position))
+        try:
+            self._current_joints = [pos_by_name[n] for n in JOINT_NAMES]
+        except KeyError:
+            pass  # partial message — not all joints published yet
 
     # ------------------------------------------------------------------ #
     #  State machine tick                                                  #
@@ -282,7 +311,8 @@ class ArmControllerNode(Node):
         t = tf.transform.translation
         q = tf.transform.rotation
         R = self._quat_to_matrix(q.x, q.y, q.z, q.w)
-        ray_cam = np.array([1.0, -(cx - _CX_OPT) / _FX, -(cy - _CY_OPT) / _FY])
+        fx, fy, cx_opt, cy_opt = self._intrinsics
+        ray_cam = np.array([1.0, -(cx - cx_opt) / fx, -(cy - cy_opt) / fy])
         ray_world = R @ ray_cam
         origin = np.array([t.x, t.y, t.z])
         if abs(ray_world[2]) < 1e-6:

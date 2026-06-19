@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch, call
 # ── Mock every ROS2 dependency before any import ────────────────────────────
 for _m in [
     'rclpy', 'rclpy.node', 'rclpy.action', 'rclpy.time',
+    'sensor_msgs', 'sensor_msgs.msg',
     'std_msgs', 'std_msgs.msg',
     'vision_msgs', 'vision_msgs.msg',
     'control_msgs', 'control_msgs.action',
@@ -54,6 +55,9 @@ def _make_node(dry_run: bool):
     node._tf_buffer = MagicMock()
     node._tf_listener = MagicMock()
     node._fire_pub = MagicMock()
+    node._info_sub = MagicMock()
+    node.destroy_subscription = MagicMock()
+    node._intrinsics = (_mod._FX, _mod._FY, _mod._CX_OPT, _mod._CY_OPT)
     node._busy = False
     node._state = State.FIRE_LASER
     node._scan_idx = 0
