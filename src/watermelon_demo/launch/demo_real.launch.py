@@ -6,7 +6,8 @@ Usage:
     ros2 launch watermelon_demo demo_real.launch.py robot_ip:=192.168.1.100 dry_run:=false
 
 Before running:
-    1. Measure the camera mount offset from tool0 and fill in the CAMERA_* constants below.
+    1. Run easy_handeye2 calibration and paste results into config/camera_params.yaml,
+       OR fill in x/y/z + roll/pitch/yaw from manual measurement (less accurate).
     2. Ensure ur_robot_driver, realsense2_camera, and image_view are installed.
     3. Set use_real_model: true and provide best.pt at /home/lior/best.pt.
 """
@@ -27,7 +28,8 @@ DEFAULT_ROBOT_IP = '192.168.1.100'
 _cam_cfg_path = os.path.join(
     os.path.dirname(__file__), '..', 'config', 'camera_params.yaml')
 with open(_cam_cfg_path) as _f:
-    _cam = yaml.safe_load(_f)['mount']
+    _cam_cfg = yaml.safe_load(_f)
+    _cam = _cam_cfg['mount']
 
 CAMERA_X     = float(_cam['x'])
 CAMERA_Y     = float(_cam['y'])
@@ -35,6 +37,23 @@ CAMERA_Z     = float(_cam['z'])
 CAMERA_ROLL  = float(_cam['roll'])
 CAMERA_PITCH = float(_cam['pitch'])
 CAMERA_YAW   = float(_cam['yaw'])
+
+# When calibrated: true, use quaternion (more accurate, from easy_handeye2).
+# When calibrated: false, fall back to roll/pitch/yaw from manual measurement.
+_calibrated = bool(_cam_cfg.get('calibrated', False))
+if _calibrated:
+    _rotation_args = [
+        '--qx', str(float(_cam['qx'])),
+        '--qy', str(float(_cam['qy'])),
+        '--qz', str(float(_cam['qz'])),
+        '--qw', str(float(_cam['qw'])),
+    ]
+else:
+    _rotation_args = [
+        '--roll',  str(CAMERA_ROLL),
+        '--pitch', str(CAMERA_PITCH),
+        '--yaw',   str(CAMERA_YAW),
+    ]
 
 
 def generate_launch_description():
@@ -98,17 +117,16 @@ def generate_launch_description():
     )
 
     # ── 4. Static TF: tool0 → camera_link ───────────────────────────────────
+    # Rotation comes from quaternion (after easy_handeye2) or RPY (manual).
     camera_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='camera_tf',
         arguments=[
-            '--x',     str(CAMERA_X),
-            '--y',     str(CAMERA_Y),
-            '--z',     str(CAMERA_Z),
-            '--roll',  str(CAMERA_ROLL),
-            '--pitch', str(CAMERA_PITCH),
-            '--yaw',   str(CAMERA_YAW),
+            '--x', str(CAMERA_X),
+            '--y', str(CAMERA_Y),
+            '--z', str(CAMERA_Z),
+            *_rotation_args,
             '--frame-id',       'tool0',
             '--child-frame-id', 'camera_link',
         ],

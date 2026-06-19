@@ -1,31 +1,37 @@
 # camera_params.yaml — RealSense D435 mount geometry on the UR5 tool0 flange.
 #
-# HOW TO MEASURE (arm at HOME pose, use calipers):
+# ── After running easy_handeye2 calibration (recommended) ───────────────────
+# Paste the quaternion output into the [calibrated] section below and set
+# calibrated: true. The launch file will use quaternion and ignore RPY values.
 #
-#   x: lateral offset from flange centre — positive = camera shifted right
-#   y: vertical offset from flange centre — positive = camera shifted down
-#   z: distance from flange face to camera lens — positive = camera sticks forward (~5 cm typical)
+# ── Without calibration (rough manual measurement) ──────────────────────────
+# Leave calibrated: false and fill in x/y/z + roll/pitch/yaw from calipers.
 #
-#   roll:  rotation around the forward (Z) axis — usually 0
-#   pitch: tilt toward the ground — positive = camera angled down toward field
+# HOW TO MEASURE manually (arm at HOME pose):
+#   x: lateral offset from flange centre — positive = camera shifted right (m)
+#   y: vertical offset from flange centre — positive = camera shifted down (m)
+#   z: distance from flange face to camera lens — typically 4–8 cm
+#   roll:  rotation around forward axis — usually 0
+#   pitch: tilt toward ground — non-zero if camera angled downward
 #   yaw:   left/right rotation — usually 0
-#
-# All distances in metres, all angles in radians.
-# Fill in these values before running demo_real.launch.py.
+
+calibrated: false   # set to true after running easy_handeye2
 
 mount:
-  x:     0.00    # TODO: measure
-  y:     0.00    # TODO: measure
-  z:     0.05    # TODO: measure (rough estimate: 5 cm)
-  roll:  0.00    # TODO: measure
-  pitch: 0.00    # TODO: measure
-  yaw:   0.00    # TODO: measure
+  # Translation (metres) — fill in from measurement or calibration
+  x: 0.00    # TODO
+  y: 0.00    # TODO
+  z: 0.05    # TODO (rough estimate: 5 cm)
 
-# RealSense D435 typical intrinsics at 640x480 — for reference only.
-# The node reads live values from /camera/color/camera_info automatically.
-# You do NOT need to edit these — they are overwritten at runtime.
-intrinsics_reference:
-  fx: 615.0   # typical D435 value at 640x480
-  fy: 615.0
-  cx: 320.0
-  cy: 240.0
+  # Rotation option A — RPY in radians (used when calibrated: false)
+  roll:  0.00
+  pitch: 0.00
+  yaw:   0.00
+
+  # Rotation option B — quaternion from easy_handeye2 (used when calibrated: true)
+  # Paste values from easy_handeye2 output YAML here:
+  #   cat ~/.ros/easy_handeye/<calibration_name>.calib.yaml
+  qx: 0.0
+  qy: 0.0
+  qz: 0.0
+  qw: 1.0
