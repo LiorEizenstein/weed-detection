@@ -1,0 +1,96 @@
+<?xml version="1.0"?>
+<!-- UR5 + Intel RealSense D435 URDF for Gazebo simulation.
+     D435 colour camera — 90x25x25 mm body, FOV 69 deg H x 42 deg V,
+     horizontal_fov = 1.2043 rad, 640x480 @ 10 Hz, colour stream only.
+     Mount offset from tool0 — x=0.030 m forward, z=0.050 m, pitch -90 deg. -->
+<robot xmlns:xacro="http://wiki.ros.org/xacro" name="ur">
+
+  <!-- Pass-through args required by the upstream ur xacro -->
+  <xacro:arg name="name"                 default="ur"/>
+  <xacro:arg name="ur_type"              default="ur5"/>
+  <xacro:arg name="tf_prefix"            default=""/>
+  <xacro:arg name="joint_limit_params"
+    default="$(find ur_description)/config/$(arg ur_type)/joint_limits.yaml"/>
+  <xacro:arg name="kinematics_params"
+    default="$(find ur_description)/config/$(arg ur_type)/default_kinematics.yaml"/>
+  <xacro:arg name="physical_params"
+    default="$(find ur_description)/config/$(arg ur_type)/physical_parameters.yaml"/>
+  <xacro:arg name="visual_params"
+    default="$(find ur_description)/config/$(arg ur_type)/visual_parameters.yaml"/>
+  <xacro:arg name="transmission_hw_interface" default=""/>
+  <xacro:arg name="safety_limits"        default="false"/>
+  <xacro:arg name="safety_pos_margin"    default="0.15"/>
+  <xacro:arg name="safety_k_position"    default="20"/>
+  <xacro:arg name="simulation_controllers" default=""/>
+  <xacro:arg name="ros_namespace"        default=""/>
+
+  <!-- Full UR5 with Gazebo ros2_control hardware interface -->
+  <xacro:include filename="$(find ur_simulation_gz)/urdf/ur_gz.urdf.xacro"/>
+
+  <!-- RealSense D435 body — 90x25x25 mm dark-grey box visible in Gazebo and RViz -->
+  <link name="camera_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.090 0.025 0.025"/>
+      </geometry>
+      <material name="d435_body">
+        <color rgba="0.18 0.18 0.18 1.0"/>
+      </material>
+    </visual>
+    <inertial>
+      <mass value="0.072"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="3e-5" ixy="0" ixz="0"
+               iyy="3e-5" iyz="0" izz="3e-5"/>
+    </inertial>
+  </link>
+
+  <!-- Mount joint from tool0 to camera_link.
+       Pitch -pi/2 aligns Gazebo camera +X axis with tool0 +Z so camera looks DOWN. -->
+  <joint name="tool0_to_camera" type="fixed">
+    <parent link="tool0"/>
+    <child  link="camera_link"/>
+    <origin xyz="0.030 0.0 0.050" rpy="0 -1.5708 0"/>
+  </joint>
+
+  <!-- ROS camera optical frame (+Z forward, +X right, +Y down).
+       Y offset of 15 mm matches the D435 colour lens offset from body centre. -->
+  <link name="camera_color_optical_frame"/>
+
+  <joint name="camera_to_optical" type="fixed">
+    <parent link="camera_link"/>
+    <child  link="camera_color_optical_frame"/>
+    <origin xyz="0 0.015 0" rpy="-1.5708 0 -1.5708"/>
+  </joint>
+
+  <!-- Gazebo camera sensor matching D435 colour stream.
+       horizontal_fov = 1.2043 rad (69 deg), 640x480, 10 Hz, clip 0.1 to 5.0 m.
+       Topic /camera/image_raw is bridged to ROS 2 by ros_gz_bridge. -->
+  <gazebo reference="camera_link">
+    <sensor name="d435_color" type="camera">
+      <update_rate>10</update_rate>
+      <always_on>true</always_on>
+      <visualize>true</visualize>
+      <topic>/camera/image_raw</topic>
+      <camera name="color">
+        <horizontal_fov>1.2043</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.10</near>
+          <far>5.0</far>
+        </clip>
+        <distortion>
+          <k1>0.0</k1><k2>0.0</k2><k3>0.0</k3>
+          <p1>0.0</p1><p2>0.0</p2>
+          <center>0.5 0.5</center>
+        </distortion>
+      </camera>
+    </sensor>
+  </gazebo>
+
+</robot>

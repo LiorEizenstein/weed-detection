@@ -28,7 +28,7 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 # ── Robot IP ────────────────────────────────────────────────────────────────
-DEFAULT_ROBOT_IP = '192.168.1.100'
+DEFAULT_ROBOT_IP = '192.168.1.113'
 
 # ── Camera mount geometry ────────────────────────────────────────────────────
 # Loaded from config/camera_params.yaml at import time so that module-level
@@ -110,9 +110,10 @@ def generate_launch_description():
             ])
         ),
         launch_arguments={
-            'ur_type':     'ur5',
-            'robot_ip':    robot_ip,
-            'launch_rviz': 'false',
+            'ur_type':                'ur5',
+            'robot_ip':               robot_ip,
+            'launch_rviz':            'false',
+            'kinematics_params_file': os.path.expanduser('~/ur5_calibration.yaml'),
         }.items(),
     )
 
@@ -198,10 +199,10 @@ def generate_launch_description():
             output='screen',
         ),
         Node(
-            package='image_view',
-            executable='image_view',
+            package='rqt_image_view',
+            executable='rqt_image_view',
             name='detection_display',
-            remappings=[('image', '/detection_image')],
+            arguments=['/detection_image'],
             output='log',
         ),
         Node(

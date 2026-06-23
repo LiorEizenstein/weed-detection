@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Weed-Centering Control Loop — State Machine</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --green:       #16a34a;
+    --green-dark:  #14532d;
+    --green-light: #dcfce7;
+    --text:        #111827;
+    --muted:       #6b7280;
+    --border:      #e5e7eb;
+    --surface:     #f9fafb;
+    --white:       #ffffff;
+    --radius:      10px;
+  }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--surface); color: var(--text); line-height: 1.6; }
+
+  header { background: var(--green-dark); color: white; padding: 2.5rem 2rem 2rem; }
+  .header-inner { max-width: 1000px; margin: 0 auto; }
+  .badge-row { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .badge { font-size: .7rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 3px 10px; border-radius: 20px; background: rgba(255,255,255,.15); color: #bbf7d0; }
+  header h1 { font-size: 1.9rem; font-weight: 800; letter-spacing: -.01em; margin-bottom: .4rem; }
+  header p.subtitle { color: #86efac; font-size: .95rem; max-width: 600px; }
+  .state-pills { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: 1.5rem; }
+  .state-pill { font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 4px 12px; border-radius: 20px; border: 1.5px solid; }
+  .pill-scan   { border-color: #94a3b8; color: #94a3b8; }
+  .pill-center { border-color: #93c5fd; color: #93c5fd; }
+  .pill-fire   { border-color: #fca5a5; color: #fca5a5; }
+  .pill-done   { border-color: #6ee7b7; color: #6ee7b7; }
+
+  main { max-width: 1000px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+  .section-label { font-size: .7rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--green); margin-bottom: .5rem; }
+  .section-title { font-size: 1.3rem; font-weight: 700; color: var(--text); margin-bottom: 1.25rem; }
+
+  .diagram-card { background: var(--white); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.5rem; margin-bottom: 2rem; box-shadow: 0 1px 4px rgba(0,0,0,.06); overflow-x: auto; }
+  .diagram-card svg { display: block; margin: 0 auto; width: 100%; max-width: 820px; }
+
+  /* info cards */
+  .cards-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 2rem; }
+  @media (max-width:640px) { .cards-grid { grid-template-columns: 1fr; } }
+  .info-card { background: var(--white); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.5rem; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+  .info-card.full { grid-column: 1 / -1; }
+  .info-card h3 { font-size: 1rem; font-weight: 700; margin-bottom: 1rem; padding-bottom: .6rem; border-bottom: 2px solid var(--green-light); }
+  table { width: 100%; border-collapse: collapse; font-size: .875rem; }
+  thead tr { background: var(--green-light); }
+  th { text-align: left; padding: .55rem .75rem; font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--green-dark); }
+  td { padding: .55rem .75rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #f0fdf4; }
+  code { font-family: "SFMono-Regular", Menlo, monospace; font-size: .82em; background: var(--green-light); color: var(--green-dark); padding: 1px 5px; border-radius: 4px; }
+  .val { font-family: "SFMono-Regular", Menlo, monospace; font-size: .85em; font-weight: 700; color: var(--green); }
+  .callout { background: var(--green-light); border-left: 4px solid var(--green); border-radius: 0 6px 6px 0; padding: .75rem 1rem; margin-top: 1rem; font-size: .85rem; color: var(--green-dark); font-weight: 500; }
+  .source-row { display: flex; align-items: center; gap: .75rem; font-size: .875rem; }
+  .source-icon { width: 36px; height: 36px; background: var(--green-light); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0; }
+  .source-row a { color: var(--green); font-family: "SFMono-Regular", Menlo, monospace; font-size: .8rem; word-break: break-all; text-decoration: none; }
+  .source-row a:hover { text-decoration: underline; }
+  footer { text-align: center; font-size: .75rem; color: var(--muted); padding-bottom: 2rem; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <div class="badge-row">
+      <span class="badge">ROS 2 Jazzy</span>
+      <span class="badge">UR5 Arm</span>
+      <span class="badge">Tm:YLF Laser</span>
+      <span class="badge">10 Hz State Machine</span>
+    </div>
+    <h1>Weed-Centering Control Loop</h1>
+    <p class="subtitle">The arm scans the field, locks onto a detected weed using a pixel-error feedback loop, and fires the laser once the weed is centred in the camera frame.</p>
+    <div class="state-pills">
+      <span class="state-pill pill-scan">① Scan</span>
+      <span class="state-pill pill-center">② Center</span>
+      <span class="state-pill pill-fire">③ Fire</span>
+      <span class="state-pill pill-done">④ Next pose</span>
+    </div>
+  </div>
+</header>
+
+<main>
+  <p class="section-label">State Machine</p>
+  <p class="section-title">Control Loop — Block Diagram</p>
+
+  <div class="diagram-card">
+    <!-- ═══════════════════ SVG BLOCK DIAGRAM ═══════════════════ -->
+    <svg viewBox="0 0 820 1040" xmlns="http://www.w3.org/2000/svg"
+         font-family="system-ui,-apple-system,sans-serif">
+      <defs>
+        <!-- arrowhead markers -->
+        <marker id="arr"   markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#64748b"/></marker>
+        <marker id="arrB"  markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
+        <marker id="arrO"  markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#ea580c"/></marker>
+        <marker id="arrG"  markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#16a34a"/></marker>
+        <marker id="arrY"  markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#ca8a04"/></marker>
+        <marker id="arrD"  markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#9ca3af"/></marker>
+      </defs>
+
+      <!-- ─── Phase background bands ─── -->
+      <rect x="8" y="62" width="804" height="158" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="6,3"/>
+      <text x="20" y="82" font-size="10" fill="#64748b" font-weight="700" letter-spacing="1">SCAN PHASE</text>
+
+      <rect x="8" y="238" width="804" height="450" rx="10" fill="#f0f6ff" stroke="#93c5fd" stroke-width="1.5" stroke-dasharray="6,3"/>
+      <text x="20" y="258" font-size="10" fill="#2563eb" font-weight="700" letter-spacing="1">CENTERING PHASE  (feedback loop — repeats until weed is centred)</text>
+
+      <rect x="8" y="706" width="804" height="182" rx="10" fill="#fff8f4" stroke="#fdba74" stroke-width="1.5" stroke-dasharray="6,3"/>
+      <text x="20" y="726" font-size="10" fill="#ea580c" font-weight="700" letter-spacing="1">FIRE PHASE</text>
+
+      <!-- ─── START ─── -->
+      <ellipse cx="410" cy="32" rx="52" ry="20" fill="#dcfce7" stroke="#16a34a" stroke-width="2.5"/>
+      <text x="410" y="36" text-anchor="middle" font-size="12" fill="#14532d" font-weight="800">START</text>
+
+      <!-- START → Block1 -->
+      <line x1="410" y1="52" x2="410" y2="88" stroke="#64748b" stroke-width="1.8" marker-end="url(#arr)"/>
+
+      <!-- ─── BLOCK 1: Move to scan pose ─── -->
+      <rect x="280" y="90" width="260" height="56" rx="7" fill="#f1f5f9" stroke="#475569" stroke-width="2"/>
+      <text x="410" y="112" text-anchor="middle" font-size="13" fill="#0f172a" font-weight="700">Move to next scan pose</text>
+      <text x="410" y="132" text-anchor="middle" font-size="10.5" fill="#64748b">Arm sweeps 21 positions across ±1.5 rad</text>
+
+      <!-- Block1 → Block2 -->
+      <line x1="410" y1="146" x2="410" y2="176" stroke="#64748b" stroke-width="1.8" marker-end="url(#arr)"/>
+
+      <!-- ─── BLOCK 2: Wait for weed ─── -->
+      <rect x="280" y="178" width="260" height="56" rx="7" fill="#f1f5f9" stroke="#475569" stroke-width="2"/>
+      <text x="410" y="200" text-anchor="middle" font-size="13" fill="#0f172a" font-weight="700">Wait for weed detection</text>
+      <text x="410" y="220" text-anchor="middle" font-size="10.5" fill="#64748b">Watches /detections · max 1.0 s per pose</text>
+
+      <!-- TIMEOUT escape (dashed) -->
+      <path d="M540,206 H680 V980 H540" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="5,3" fill="none" marker-end="url(#arrD)"/>
+      <rect x="598" y="186" width="116" height="40" rx="5" fill="white" stroke="#d1d5db" stroke-width="1.2"/>
+      <text x="656" y="202" text-anchor="middle" font-size="10" fill="#6b7280" font-weight="600">timeout — no weed</text>
+      <text x="656" y="218" text-anchor="middle" font-size="10" fill="#6b7280">→ skip to next pose</text>
+
+      <!-- Block2 → Block3 (weed detected) -->
+      <line x1="410" y1="234" x2="410" y2="268" stroke="#2563eb" stroke-width="2" marker-end="url(#arrB)"/>
+      <rect x="330" y="244" width="160" height="20" rx="4" fill="white" stroke="#bfdbfe" stroke-width="1"/>
+      <text x="410" y="257" text-anchor="middle" font-size="10.5" fill="#1d4ed8" font-weight="600">weed detected ↓</text>
+
+      <!-- ─── BLOCK 3: Compute error ─── -->
+      <rect x="265" y="270" width="290" height="72" rx="7" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+      <text x="410" y="291" text-anchor="middle" font-size="13" fill="#1e3a8a" font-weight="700">Compute pixel error</text>
+      <text x="410" y="310" text-anchor="middle" font-size="10.5" fill="#1d4ed8" font-style="italic">err_x = (cx − W/2) / (W/2)</text>
+      <text x="410" y="327" text-anchor="middle" font-size="10.5" fill="#1d4ed8" font-style="italic">err_y = (cy − H/2) / (H/2)</text>
+
+      <!-- Block3 → Diamond1 -->
+      <line x1="410" y1="342" x2="410" y2="370" stroke="#2563eb" stroke-width="1.8" marker-end="url(#arrB)"/>
+
+      <!-- ─── DIAMOND 1: Centred? ─── -->
+      <!-- diamond center cy=410 -->
+      <polygon points="410,372 520,410 410,448 300,410" fill="#fefce8" stroke="#ca8a04" stroke-width="2"/>
+      <text x="410" y="405" text-anchor="middle" font-size="12" fill="#713f12" font-weight="700">Centred?</text>
+      <text x="410" y="422" text-anchor="middle" font-size="10" fill="#854d0e">|err_x|&lt;0.20 AND |err_y|&lt;0.20</text>
+
+      <!-- NO label + arrow down -->
+      <text x="374" y="467" text-anchor="middle" font-size="11" fill="#b91c1c" font-weight="700">NO</text>
+      <line x1="410" y1="448" x2="410" y2="478" stroke="#2563eb" stroke-width="1.8" marker-end="url(#arrB)"/>
+
+      <!-- YES label + bypass arrow (right side, goes down to Fire) -->
+      <text x="534" y="406" text-anchor="start" font-size="11" fill="#15803d" font-weight="700">YES</text>
+      <path d="M520,410 H760 V788 H545" stroke="#16a34a" stroke-width="2" fill="none" marker-end="url(#arrG)"/>
+      <rect x="660" y="580" width="106" height="36" rx="5" fill="white" stroke="#86efac" stroke-width="1.5"/>
+      <text x="713" y="596" text-anchor="middle" font-size="10" fill="#15803d" font-weight="700">Weed centred ✓</text>
+      <text x="713" y="610" text-anchor="middle" font-size="10" fill="#16a34a">→ fire laser</text>
+
+      <!-- ─── DIAMOND 2: Dominant axis? ─── -->
+      <!-- center cy=518 -->
+      <polygon points="410,480 520,518 410,556 300,518" fill="#fefce8" stroke="#ca8a04" stroke-width="2"/>
+      <text x="410" y="512" text-anchor="middle" font-size="12" fill="#713f12" font-weight="700">Dominant axis?</text>
+      <text x="410" y="529" text-anchor="middle" font-size="10" fill="#854d0e">|err_x| ≥ |err_y| ?</text>
+
+      <!-- X (left) label + arrow -->
+      <text x="284" y="514" text-anchor="end" font-size="11" fill="#1d4ed8" font-weight="700">X</text>
+      <path d="M300,518 H175 V574" stroke="#2563eb" stroke-width="1.8" fill="none" marker-end="url(#arrB)"/>
+      <text x="232" y="540" text-anchor="middle" font-size="10" fill="#1d4ed8">shoulder_pan</text>
+
+      <!-- Y (right) label + arrow -->
+      <text x="535" y="514" text-anchor="start" font-size="11" fill="#7c3aed" font-weight="700">Y</text>
+      <path d="M520,518 H645 V574" stroke="#7c3aed" stroke-width="1.8" fill="none" marker-end="url(#arrY)"/>
+      <text x="588" y="540" text-anchor="middle" font-size="10" fill="#6d28d9">wrist_2</text>
+
+      <!-- ─── BLOCK: Correct X (left branch) ─── -->
+      <rect x="90" y="576" width="170" height="58" rx="7" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+      <text x="175" y="598" text-anchor="middle" font-size="12" fill="#1e3a8a" font-weight="700">Correct X</text>
+      <text x="175" y="614" text-anchor="middle" font-size="10" fill="#1d4ed8">pan −= err_x × 0.10 rad</text>
+      <text x="175" y="628" text-anchor="middle" font-size="10" fill="#1d4ed8">clamp to [−π, π]</text>
+
+      <!-- ─── BLOCK: Correct Y (right branch) ─── -->
+      <rect x="560" y="576" width="170" height="58" rx="7" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+      <text x="645" y="598" text-anchor="middle" font-size="12" fill="#3b0764" font-weight="700">Correct Y</text>
+      <text x="645" y="614" text-anchor="middle" font-size="10" fill="#6d28d9">wrist_2 −= err_y × 0.10 rad</text>
+      <text x="645" y="628" text-anchor="middle" font-size="10" fill="#6d28d9">clamp to [−2.5, −0.5]</text>
+
+      <!-- Correct X → merge → Block4 -->
+      <path d="M175,634 V660 H410 V680" stroke="#2563eb" stroke-width="1.8" fill="none" marker-end="url(#arrB)"/>
+
+      <!-- Correct Y → merge → Block4 -->
+      <path d="M645,634 V660 H410" stroke="#7c3aed" stroke-width="1.8" fill="none"/>
+
+      <!-- ─── BLOCK 4: Move arm ─── -->
+      <rect x="270" y="682" width="280" height="56" rx="7" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+      <text x="410" y="704" text-anchor="middle" font-size="13" fill="#1e3a8a" font-weight="700">Move arm</text>
+      <text x="410" y="722" text-anchor="middle" font-size="10.5" fill="#1d4ed8">Send /follow_joint_trajectory · wait 1.0 s</text>
+
+      <!-- LOOP BACK: Move arm → Compute error (left side, dashed) -->
+      <path d="M270,710 H55 V306 H265" stroke="#2563eb" stroke-width="1.8" stroke-dasharray="6,3" fill="none" marker-end="url(#arrB)"/>
+      <rect x="10" y="480" width="50" height="66" rx="4" fill="white" stroke="#bfdbfe" stroke-width="1.2"/>
+      <text x="35" y="498" text-anchor="middle" font-size="9" fill="#1d4ed8" font-weight="700" transform="rotate(-90,35,513)">retry loop</text>
+
+      <!-- LOST WEED escape (dashed) -->
+      <path d="M550,710 H760 V1004" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="5,3" fill="none" marker-end="url(#arrD)"/>
+      <rect x="572" y="690" width="120" height="36" rx="5" fill="white" stroke="#d1d5db" stroke-width="1.2"/>
+      <text x="632" y="706" text-anchor="middle" font-size="10" fill="#6b7280" font-weight="600">weed lost &gt; 8 s</text>
+      <text x="632" y="720" text-anchor="middle" font-size="10" fill="#6b7280">→ restart scan</text>
+
+      <!-- ─── BLOCK 5: Fire laser ─── -->
+      <!-- reached via YES bypass from right at x=760 y=788 -->
+      <rect x="265" y="740" width="280" height="56" rx="7" fill="#ffedd5" stroke="#ea580c" stroke-width="2"/>
+      <text x="405" y="762" text-anchor="middle" font-size="13" fill="#7c2d12" font-weight="700">Fire laser</text>
+      <text x="405" y="780" text-anchor="middle" font-size="10.5" fill="#c2410c">Publish /laser_fire = True · hold 1.0 s · set False</text>
+
+      <!-- Block5 → Block6 -->
+      <line x1="405" y1="796" x2="405" y2="826" stroke="#ea580c" stroke-width="1.8" marker-end="url(#arrO)"/>
+
+      <!-- ─── BLOCK 6: Blacklist ─── -->
+      <rect x="265" y="828" width="280" height="56" rx="7" fill="#ffedd5" stroke="#ea580c" stroke-width="2"/>
+      <text x="405" y="850" text-anchor="middle" font-size="13" fill="#7c2d12" font-weight="700">Blacklist treated zone</text>
+      <text x="405" y="868" text-anchor="middle" font-size="10.5" fill="#c2410c">Skip pan angles within ±0.25 rad next scan</text>
+
+      <!-- Block6 → END -->
+      <line x1="405" y1="884" x2="405" y2="914" stroke="#64748b" stroke-width="1.8" marker-end="url(#arr)"/>
+
+      <!-- ─── END: Next scan pose ─── -->
+      <rect x="270" y="916" width="280" height="52" rx="7" fill="#f0fdf4" stroke="#16a34a" stroke-width="2.5"/>
+      <text x="410" y="938" text-anchor="middle" font-size="13" fill="#14532d" font-weight="700">Weed treated ✓</text>
+      <text x="410" y="956" text-anchor="middle" font-size="10.5" fill="#16a34a">Advance to next scan pose and repeat</text>
+
+      <!-- Escape paths converge here (dashed arrows point at this block from right) -->
+
+      <!-- ─── LEGEND ─── -->
+      <rect x="8" y="968" width="520" height="62" rx="6" fill="white" stroke="#e5e7eb" stroke-width="1"/>
+      <text x="20" y="984" font-size="10" fill="#6b7280" font-weight="700">LEGEND</text>
+      <!-- solid blue = main flow -->
+      <line x1="20" y1="1000" x2="60" y2="1000" stroke="#2563eb" stroke-width="2" marker-end="url(#arrB)"/>
+      <text x="66" y="1004" font-size="10" fill="#374151">Main control flow</text>
+      <!-- solid green = success exit -->
+      <line x1="155" y1="1000" x2="195" y2="1000" stroke="#16a34a" stroke-width="2" marker-end="url(#arrG)"/>
+      <text x="201" y="1004" font-size="10" fill="#374151">Centred → fire</text>
+      <!-- dashed gray = escape -->
+      <line x1="285" y1="1000" x2="325" y2="1000" stroke="#9ca3af" stroke-width="2" stroke-dasharray="5,3" marker-end="url(#arrD)"/>
+      <text x="331" y="1004" font-size="10" fill="#374151">Timeout / lost weed escape</text>
+      <!-- diamond = decision -->
+      <polygon points="432,994 452,1002 432,1010 412,1002" fill="#fefce8" stroke="#ca8a04" stroke-width="1.5"/>
+      <text x="458" y="1006" font-size="10" fill="#374151">Decision</text>
+    </svg>
+  </div>
+
+  <!-- Info cards -->
+  <p class="section-label" style="margin-top:2rem">Configuration</p>
+  <p class="section-title">Parameters &amp; Design Notes</p>
+
+  <div class="cards-grid">
+    <div class="info-card full">
+      <h3>Control Loop Parameters</h3>
+      <table>
+        <thead><tr><th>Parameter</th><th>Value</th><th>Role</th></tr></thead>
+        <tbody>
+          <tr><td><code>FIRE_ZONE_FRAC</code></td><td><span class="val">0.20</span></td><td>Dead-zone threshold — fires when weed is within 20% of image centre in both axes</td></tr>
+          <tr><td><code>PAN_GAIN</code></td><td><span class="val">0.10 rad/px</span></td><td>Correction step size for X-axis (<code>shoulder_pan</code>)</td></tr>
+          <tr><td><code>WRIST2_GAIN</code></td><td><span class="val">0.10 rad/px</span></td><td>Correction step size for Y-axis (<code>wrist_2</code>)</td></tr>
+          <tr><td><code>WEED_MOVE_TIME</code></td><td><span class="val">1.0 s</span></td><td>Duration of each correction move</td></tr>
+          <tr><td><code>WEED_LOCK_TIMEOUT</code></td><td><span class="val">8.0 s</span></td><td>Give up on lost weed after this long</td></tr>
+          <tr><td><code>TREATED_ZONE_RAD</code></td><td><span class="val">0.25 rad</span></td><td>Blacklist radius around a fired pan angle</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="info-card">
+      <h3>Why single-axis correction per tick?</h3>
+      <p style="font-size:.9rem;color:#374151;line-height:1.75">
+        Rotating <code>shoulder_pan</code> shifts the image in <em>both</em> X and Y simultaneously, so correcting both axes at once creates a coupled feedback loop that can diverge.
+      </p>
+      <div class="callout">
+        Correcting only the dominant error axis per step decouples the loop and ensures the arm spirals in on the target instead of oscillating around it.
+      </div>
+    </div>
+
+    <div class="info-card">
+      <h3>Implementation</h3>
+      <p style="font-size:.875rem;color:#374151;margin-bottom:1rem">
+        Implemented in the <code>State.MOVE_TO_WEED</code> branch of <code>_tick()</code>:
+      </p>
+      <div class="source-row">
+        <div class="source-icon">📄</div>
+        <div>
+          <div style="font-size:.75rem;color:var(--muted);margin-bottom:2px">Source file</div>
+          <a href="../src/watermelon_demo/watermelon_demo/arm_controller_node.py">
+            src/watermelon_demo/watermelon_demo/<br/>arm_controller_node.py
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  Weed-Centering Control Loop &mdash; ROS 2 Jazzy / UR5 / Tm:YLF Laser &mdash; Watermelon Demo
+</footer>
+</body>
+</html>

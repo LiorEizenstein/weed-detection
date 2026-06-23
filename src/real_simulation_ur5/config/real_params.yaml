@@ -1,0 +1,15 @@
+detection_node:
+  ros__parameters:
+    model_path: /home/lior/best.pt
+    save_debug_frames: false
+
+arm_controller_node:
+  ros__parameters:
+    dry_run: true            # set to false when ready to fire the laser
+    scan_dwell_time: 1.0
+    laser_fire_duration: 1.0
+    weed_z: 0.03             # weed top height in metres — tune to actual field height
+
+laser_effect_node:
+  ros__parameters:
+    weed_ground_z: 0.03      # must match arm_controller_node.weed_z

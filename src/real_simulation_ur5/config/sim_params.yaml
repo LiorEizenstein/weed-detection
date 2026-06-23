@@ -1,0 +1,21 @@
+sim_arm_controller:
+  ros__parameters:
+    # Seconds to wait at each scan pose for a weed detection
+    scan_dwell_time: 3.0
+    # Seconds to pause after a weed is detected (simulates treatment)
+    detection_pause: 2.0
+    # Seconds for each arm move between scan poses
+    scan_move_time: 2.0
+    use_sim_time: true
+
+sim_detection_node:
+  ros__parameters:
+    # Path to YOLO .pt weights (set to /home/lior/best.pt if available)
+    model_path: '/home/lior/best.pt'
+    confidence_threshold: 0.7
+    # Stub mode (used when model_path does not exist):
+    # probability per cooldown window of generating a fake detection
+    stub_detection_probability: 0.40
+    # Minimum seconds between stub detections
+    stub_cooldown_sec: 5.0
+    use_sim_time: true
