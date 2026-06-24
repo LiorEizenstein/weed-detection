@@ -14,14 +14,17 @@ Usage:
 """
 
 import os
+import sys
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
-                            TimerAction)
+from launch.actions import (DeclareLaunchArgument, ExecuteProcess,
+                            IncludeLaunchDescription, TimerAction)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+
+_WEED_DETECT_PY = os.path.expanduser('~/ros2_ws/weed_detection-2.py')
 
 
 def generate_launch_description():
@@ -65,11 +68,12 @@ def generate_launch_description():
 
     # ── 3. Sim nodes + RViz (delayed 10 s for Gz + controllers to be ready) ──
     sim_nodes = TimerAction(period=10.0, actions=[
-        Node(
-            package='real_simulation_ur5',
-            executable='sim_detection_node',
-            name='sim_detection_node',
-            parameters=[params_file, {'model_path': model_path}],
+        ExecuteProcess(
+            cmd=[sys.executable, _WEED_DETECT_PY,
+                 '--topic', '/camera/image_raw',
+                 '--model', model_path,
+                 '--confidence', '0.7'],
+            name='weed_detection',
             output='screen',
         ),
         Node(
