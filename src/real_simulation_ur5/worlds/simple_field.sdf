@@ -13,6 +13,7 @@
     <plugin name='gz::sim::systems::Contact'         filename='gz-sim-contact-system'/>
     <plugin name='gz::sim::systems::Sensors'         filename='gz-sim-sensors-system'>
       <render_engine>ogre2</render_engine>
+      <headless_rendering>1</headless_rendering>
     </plugin>
 
     <!-- ── Scene / atmosphere ────────────────────────────────────────────── -->

@@ -21,6 +21,17 @@ def import_node(name):
 
 class TestDetectionNode:
 
+    @classmethod
+    def setup_class(cls):
+        import sys
+        # Other test files mock vision_msgs at module level; remove those mocks
+        # so detection_node is imported with the real vision_msgs classes.
+        for mod_name in ['vision_msgs', 'vision_msgs.msg']:
+            if mod_name in sys.modules:
+                del sys.modules[mod_name]
+        if 'watermelon_demo.detection_node' in sys.modules:
+            del sys.modules['watermelon_demo.detection_node']
+
     def test_module_imports(self):
         mod = import_node('detection_node')
         assert hasattr(mod, 'DetectionNode')

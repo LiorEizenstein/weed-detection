@@ -21,8 +21,8 @@ class _S:
     WAITING    = 'WAITING'
     FOUND_WEED = 'FOUND_WEED'
 
-_EXPECTED_HOME_POSE  = [0.0, -1.57, 0.0, -1.57, 0.0, 0.0]
-_EXPECTED_SCAN_COUNT = 11   # (1.5 - (-1.5)) / 0.3 + 1
+_EXPECTED_SCAN_COUNT = 10   # 10-pose sweep from -90° to +90°
+_EXPECTED_JOINT_COUNT = 5   # SO-ARM101 has 5 joints
 
 
 # ── ROS stub helpers (called only inside fixtures) ───────────────────────────
@@ -126,9 +126,9 @@ def ros_stubs():
 
 @pytest.fixture(scope='module')
 def production_constants(ros_stubs):
-    """Import production HOME_POSE and SCAN_POSES after stubs are in place."""
-    from real_simulation_ur5.sim_arm_controller import HOME_POSE, SCAN_POSES
-    return HOME_POSE, SCAN_POSES
+    """Import production SCAN_POSES after stubs are in place."""
+    from real_simulation_ur5.sim_arm_controller import SCAN_POSES
+    return SCAN_POSES
 
 
 # ── Lightweight state-machine harness ────────────────────────────────────────
@@ -299,34 +299,24 @@ def test_multiple_detections_all_recorded():
 
 # ── Production constant verification (requires ROS stubs) ────────────────────
 
-def test_home_pose_is_six_joints(production_constants):
-    home, _ = production_constants
-    assert len(home) == 6
-
-
-def test_home_pose_values(production_constants):
-    home, _ = production_constants
-    assert home == _EXPECTED_HOME_POSE
-
-
 def test_scan_poses_count(production_constants):
-    _, poses = production_constants
+    poses = production_constants
     assert len(poses) == _EXPECTED_SCAN_COUNT
 
 
-def test_scan_poses_all_six_joints(production_constants):
-    _, poses = production_constants
+def test_scan_poses_all_five_joints(production_constants):
+    poses = production_constants
     for pose in poses:
-        assert len(pose) == 6
+        assert len(pose) == _EXPECTED_JOINT_COUNT
 
 
 def test_scan_poses_pan_within_range(production_constants):
-    _, poses = production_constants
+    poses = production_constants
     for pose in poses:
-        assert -1.51 <= pose[0] <= 1.51
+        assert -1.58 <= pose[0] <= 1.58
 
 
-def test_scan_poses_pan_strictly_decreasing(production_constants):
-    _, poses = production_constants
+def test_scan_poses_pan_strictly_increasing(production_constants):
+    poses = production_constants
     pans = [p[0] for p in poses]
-    assert all(pans[i] > pans[i + 1] for i in range(len(pans) - 1))
+    assert all(pans[i] < pans[i + 1] for i in range(len(pans) - 1))

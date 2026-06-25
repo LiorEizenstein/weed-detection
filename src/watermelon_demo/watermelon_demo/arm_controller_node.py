@@ -98,6 +98,7 @@ class State:
     MOVE_TO_WEED = 'MOVE_TO_WEED'
     FIRE_LASER   = 'FIRE_LASER'
     FIRING       = 'FIRING'     # beam on, waiting out laser_fire_duration
+    RETURN_HOME  = 'RETURN_HOME'
 
 
 class ArmControllerNode(Node):

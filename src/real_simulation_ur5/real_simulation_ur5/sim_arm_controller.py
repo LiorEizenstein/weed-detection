@@ -1,28 +1,30 @@
 """
-sim_arm_controller — simplified Gazebo simulation state machine.
+sim_arm_controller — SO-ARM101 field scanning state machine.
 
 Behaviour:
-  INIT        → move to HOME pose
-  SCAN_MOVE   → move arm to the next scan pose (shoulder_pan sweeps left→right)
-  WAITING     → hold still for scan_dwell_time seconds, watching /detections
-                  ├─ weed detected  → FOUND_WEED
-                  └─ timeout        → SCAN_MOVE  (advance to next pose)
-  FOUND_WEED  → log detection, publish an RViz sphere marker, wait
-                detection_pause seconds, then → SCAN_MOVE
+  1. Wait for the trajectory action server to become available.
+  2. Move to SCAN_POSES[0] (left edge of the sweep).
+  3. Dwell scan_dwell_time seconds at each pose, collecting /detections.
+     Any weeds found are logged and published as RViz markers.
+  4. Move to the next pose and repeat until the final pose is reached.
+  5. Stop at the final pose (no reverse sweep).
 
-No centering loop — this is deliberately simpler than the real-hardware node.
-Add it later if you want to close the visual servo loop in simulation.
+States:
+  WAIT_SERVER  — polling for /arm_controller action server
+  INIT_MOVE    — moving to the first scan pose
+  MOVING       — moving to the next scan pose
+  DWELLING     — holding pose, watching for weeds
+  DONE         — sweep complete, arm holds final pose
 
 Topics subscribed:
   /detections    vision_msgs/Detection2DArray
   /joint_states  sensor_msgs/JointState
 
 Topics published:
-  /weed_markers  visualization_msgs/MarkerArray   (orange spheres in RViz)
+  /weed_markers  visualization_msgs/MarkerArray  (orange spheres in RViz)
 
 Action client:
-  /scaled_joint_trajectory_controller/follow_joint_trajectory
-  (provided by ur_simulation_gz via ur_ros2_control)
+  /arm_controller/follow_joint_trajectory
 """
 
 import math
@@ -39,32 +41,38 @@ from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import ColorRGBA
 
 JOINT_NAMES = [
-    'shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
-    'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint',
+    'base_link_to_link1',
+    'link1_to_link2',
+    'link2_to_link3',
+    'link3_to_link4',
+    'link4_to_link5',
 ]
 
-# Scan arc: shoulder_pan sweeps +1.5 → -1.5 rad (~170 deg) in larger steps
-# (fewer poses than real-hw node so each dwell is clearly visible)
-PAN_MAX  =  1.5
-PAN_MIN  = -1.5
-PAN_STEP = 0.3
-_N       = int(round((PAN_MAX - PAN_MIN) / PAN_STEP)) + 1
+# 180° sweep: joint0 (yaw) goes from -π/2 to +π/2 in equal steps.
+_N_POSES  = 10
+_PAN_MIN  = -1.5708   # -90°
+_PAN_MAX  =  1.5708   # +90°
+
 SCAN_POSES = [
-    [round(PAN_MAX - i * PAN_STEP, 3), -1.2, 1.4, -1.8, -1.57, 0.0]
-    for i in range(_N)
+    [round(_PAN_MIN + i * (_PAN_MAX - _PAN_MIN) / (_N_POSES - 1), 4),
+     -1.5, 1.5, -0.5, 0.0]
+    for i in range(_N_POSES)
 ]
 
-HOME_POSE    = [0.0, -1.57, 0.0, -1.57, 0.0, 0.0]
-WEED_IDS     = {'1', '2'}
-ACTION_SERVER = '/scaled_joint_trajectory_controller/follow_joint_trajectory'
+WEED_IDS      = {'1', '2'}
+ACTION_SERVER = '/arm_controller/follow_joint_trajectory'
+
+# How long to allow a move before giving up and dwelling anyway.
+# Must be comfortably longer than scan_move_time so the arm can settle.
+_MOVE_TIMEOUT_FACTOR = 2.5
 
 
 class _S:
-    INIT       = 'INIT'
-    SCAN_MOVE  = 'SCAN_MOVE'
-    MOVING     = 'MOVING'
-    WAITING    = 'WAITING'
-    FOUND_WEED = 'FOUND_WEED'
+    WAIT_SERVER = 'WAIT_SERVER'
+    INIT_MOVE   = 'INIT_MOVE'
+    MOVING      = 'MOVING'
+    DWELLING    = 'DWELLING'
+    DONE        = 'DONE'
 
 
 class SimArmController(Node):
@@ -72,46 +80,47 @@ class SimArmController(Node):
     def __init__(self):
         super().__init__('sim_arm_controller')
 
-        self.declare_parameter('scan_dwell_time', 3.0)
-        self.declare_parameter('detection_pause', 2.0)
-        self.declare_parameter('scan_move_time', 2.0)
+        self.declare_parameter('scan_dwell_time', 0.5)
+        self.declare_parameter('scan_move_time',  1.5)
 
         self._action = ActionClient(self, FollowJointTrajectory, ACTION_SERVER)
-        self._det_sub = self.create_subscription(
+        self.create_subscription(
             Detection2DArray, '/detections', self._on_detection, 10)
         self.create_subscription(
             JointState, '/joint_states', self._on_joints, 10)
         self._marker_pub = self.create_publisher(
             MarkerArray, '/weed_markers', 10)
 
-        self._state           = _S.INIT
-        self._scan_idx        = 0
-        self._current_joints  = list(HOME_POSE)
+        self._state           = _S.WAIT_SERVER
+        self._pose_idx        = 0          # which pose we are currently dwelling at
+        self._current_joints  = [0.0] * len(JOINT_NAMES)
         self._joints_ok       = False
-        self._busy            = False
-        self._pending_dets    = []     # all weeds seen this dwell window
-        self._wait_start      = 0.0
-        self._found_start     = 0.0
-        self._marker_id       = 0
-        self._detections_seen = 0
+        self._state_entered   = 0.0
+        self._goal_active     = False
+        self._dwell_dets      = []
+        self._detections_total = 0
 
         self._timer = self.create_timer(0.1, self._tick)
         self.get_logger().info(
-            f'sim_arm_controller ready — {len(SCAN_POSES)} poses  '
+            f'sim_arm_controller ready — {len(SCAN_POSES)} poses, '
+            f'{math.degrees(_PAN_MAX - _PAN_MIN):.0f}° sweep  '
             f'dwell={self.get_parameter("scan_dwell_time").value}s  '
-            f'action={ACTION_SERVER}')
+            f'move={self.get_parameter("scan_move_time").value}s')
 
-    # ── subscriptions ────────────────────────────────────────────────────────
+    # ── subscriptions ─────────────────────────────────────────────────────────
 
     def _on_detection(self, msg: Detection2DArray):
+        if self._state != _S.DWELLING:
+            return
         for det in msg.detections:
             for hyp in det.results:
                 if hyp.hypothesis.class_id in WEED_IDS:
-                    entry = (int(det.bbox.center.position.x),
-                             int(det.bbox.center.position.y),
-                             hyp.hypothesis.class_id,
-                             hyp.hypothesis.score)
-                    self._pending_dets.append(entry)
+                    self._dwell_dets.append((
+                        int(det.bbox.center.position.x),
+                        int(det.bbox.center.position.y),
+                        hyp.hypothesis.class_id,
+                        hyp.hypothesis.score,
+                    ))
 
     def _on_joints(self, msg: JointState):
         pos = dict(zip(msg.name, msg.position))
@@ -123,91 +132,118 @@ class SimArmController(Node):
         except KeyError:
             pass
 
-    # ── main tick ────────────────────────────────────────────────────────────
+    # ── main tick ─────────────────────────────────────────────────────────────
 
     def _tick(self):
-        if self._busy:
+        now = self._now()
+
+        # ── WAIT_SERVER ──────────────────────────────────────────────────────
+        if self._state == _S.WAIT_SERVER:
+            if not self._action.server_is_ready():
+                return
+            self.get_logger().info(
+                'Action server ready — moving to scan start position')
+            self._send_goal(SCAN_POSES[0], duration_sec=3.0)
+            self._enter(_S.INIT_MOVE)
             return
 
-        if self._state == _S.INIT:
-            self.get_logger().info('INIT → moving to HOME')
-            self._send_goal(HOME_POSE, duration_sec=4.0,
-                            on_done=lambda: self._set(_S.SCAN_MOVE))
+        # ── INIT_MOVE ────────────────────────────────────────────────────────
+        if self._state == _S.INIT_MOVE:
+            # Give extra time for the arm to reach the starting pose from
+            # wherever Gazebo spawned it.
+            if self._goal_active and now - self._state_entered < 5.0:
+                return
+            if self._goal_active:
+                self.get_logger().warn('Init move timed out — starting scan anyway')
+                self._goal_active = False
+            self._pose_idx = 0
+            self._start_dwell()
+            return
 
-        elif self._state == _S.SCAN_MOVE:
-            idx  = self._scan_idx % len(SCAN_POSES)
-            pose = SCAN_POSES[idx]
-            self._scan_idx += 1
-            self.get_logger().info(
-                f'SCAN_MOVE → pose {idx + 1}/{len(SCAN_POSES)}  '
-                f'pan={pose[0]:+.2f} rad')
-            self._last_det = None
-            t = self.get_parameter('scan_move_time').value
-            self._send_goal(pose, duration_sec=t, on_done=self._enter_waiting)
+        # ── MOVING ───────────────────────────────────────────────────────────
+        if self._state == _S.MOVING:
+            move_time = self.get_parameter('scan_move_time').value
+            timeout   = move_time * _MOVE_TIMEOUT_FACTOR
+            if self._goal_active and now - self._state_entered < timeout:
+                return
+            if self._goal_active:
+                self.get_logger().warn(
+                    f'Move timed out after {now - self._state_entered:.1f}s '
+                    f'(limit {timeout:.1f}s) — advancing to dwell')
+                self._goal_active = False
+            self._start_dwell()
+            return
 
-        elif self._state == _S.MOVING:
-            pass  # waiting for action to finish
-
-        elif self._state == _S.WAITING:
-            now = self._now()
-            dwell_expired = now - self._wait_start > \
-                self.get_parameter('scan_dwell_time').value
-            if dwell_expired:
-                if self._pending_dets:
-                    # Mark ALL weeds collected during this dwell window
-                    seen = set()
-                    for cx, cy, cls_id, conf in self._pending_dets:
-                        key = (cx // 20, cy // 20)  # deduplicate nearby hits
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        cls_name = 'weed_side' if cls_id == '1' else 'weed_top'
-                        self._detections_seen += 1
-                        self.get_logger().info(
-                            f'>>> WEED #{self._detections_seen}  '
-                            f'class={cls_name}  conf={conf:.2f}  px=({cx},{cy})')
-                        self._publish_marker(cls_name)
-                    self._pending_dets = []
-                    self._found_start = now
-                    self._state = _S.FOUND_WEED
-                else:
-                    self.get_logger().info(
-                        'No weed in dwell window — advancing to next pose')
-                    self._state = _S.SCAN_MOVE
-
-        elif self._state == _S.FOUND_WEED:
-            if self._now() - self._found_start > \
-                    self.get_parameter('detection_pause').value:
+        # ── DWELLING ─────────────────────────────────────────────────────────
+        if self._state == _S.DWELLING:
+            dwell = self.get_parameter('scan_dwell_time').value
+            if now - self._state_entered < dwell:
+                return
+            # Dwell complete — log weeds
+            self._flush_detections()
+            # Advance or stop
+            if self._pose_idx >= len(SCAN_POSES) - 1:
                 self.get_logger().info(
-                    f'Detection logged (total={self._detections_seen}) — resuming scan')
-                self._state = _S.SCAN_MOVE
+                    f'Sweep complete — reached final pose '
+                    f'({math.degrees(_PAN_MAX):.0f}°). Holding position.')
+                self._enter(_S.DONE)
+                return
+            self._pose_idx += 1
+            pose      = SCAN_POSES[self._pose_idx]
+            move_time = self.get_parameter('scan_move_time').value
+            self.get_logger().info(
+                f'→ pose {self._pose_idx + 1}/{len(SCAN_POSES)}  '
+                f'pan={math.degrees(pose[0]):+.1f}°')
+            self._send_goal(pose, duration_sec=move_time)
+            self._enter(_S.MOVING)
+            return
 
-    # ── helpers ──────────────────────────────────────────────────────────────
+        # ── DONE — nothing to do ─────────────────────────────────────────────
+
+    # ── helpers ───────────────────────────────────────────────────────────────
 
     def _now(self):
         return self.get_clock().now().nanoseconds / 1e9
 
-    def _set(self, state):
-        self._state = state
+    def _enter(self, state):
+        self._state        = state
+        self._state_entered = self._now()
 
-    def _enter_waiting(self):
-        self._pending_dets = []
-        self._wait_start = self._now()
-        self._state     = _S.WAITING
-        pan = self._current_joints[0] if self._joints_ok else 0.0
+    def _start_dwell(self):
+        self._dwell_dets = []
+        self._enter(_S.DWELLING)
+        pan_deg = math.degrees(self._current_joints[0]) if self._joints_ok else 0.0
         self.get_logger().info(
-            f'WAITING at pan={pan:+.2f} rad  '
+            f'DWELLING at pose {self._pose_idx + 1}/{len(SCAN_POSES)}  '
+            f'pan={pan_deg:+.1f}°  '
             f'(dwell={self.get_parameter("scan_dwell_time").value:.1f}s)')
 
+    def _flush_detections(self):
+        if not self._dwell_dets:
+            self.get_logger().info(
+                f'Pose {self._pose_idx + 1}/{len(SCAN_POSES)} — no weeds detected')
+            return
+        seen = set()
+        for cx, cy, cls_id, conf in self._dwell_dets:
+            key = (cx // 20, cy // 20)
+            if key in seen:
+                continue
+            seen.add(key)
+            self._detections_total += 1
+            cls_name = 'weed_side' if cls_id == '1' else 'weed_top'
+            self.get_logger().info(
+                f'>>> WEED #{self._detections_total}  '
+                f'class={cls_name}  conf={conf:.2f}  px=({cx},{cy})')
+            self._publish_marker(cls_name)
+        self._dwell_dets = []
+
     def _publish_marker(self, cls_name: str):
-        # Approximate world position: 0.6 m from base in the scan direction
         pan = self._current_joints[0] if self._joints_ok else 0.0
         m = Marker()
         m.header.frame_id = 'base_link'
-        m.header.stamp = self.get_clock().now().to_msg()
-        m.ns    = 'weeds'
-        m.id    = self._marker_id
-        self._marker_id += 1
+        m.header.stamp    = self.get_clock().now().to_msg()
+        m.ns     = 'weeds'
+        m.id     = self._detections_total
         m.type   = Marker.SPHERE
         m.action = Marker.ADD
         m.pose.position.x = 0.6 * math.cos(pan)
@@ -216,25 +252,15 @@ class SimArmController(Node):
         m.pose.orientation.w = 1.0
         m.scale.x = m.scale.y = m.scale.z = 0.10
         m.color = ColorRGBA(r=1.0, g=0.35, b=0.0, a=0.9)
-        m.lifetime.sec = 0   # permanent until cleared
-
+        m.lifetime.sec = 0
         arr = MarkerArray()
         arr.markers.append(m)
         self._marker_pub.publish(arr)
-        self.get_logger().info(
-            f'RViz marker #{m.id} ({cls_name}) at '
-            f'({m.pose.position.x:.2f}, {m.pose.position.y:.2f})')
 
-    def _send_goal(self, joints, duration_sec=3.0, on_done=None):
-        self._state = _S.MOVING
-        if not self._action.wait_for_server(timeout_sec=1.0):
-            self.get_logger().warn(
-                f'{ACTION_SERVER} not ready — skipping move')
-            self._busy = False
-            if on_done:
-                on_done()
+    def _send_goal(self, joints, duration_sec: float):
+        if not self._action.server_is_ready():
+            self.get_logger().warn(f'{ACTION_SERVER} not ready — skipping move')
             return
-
         goal = FollowJointTrajectory.Goal()
         goal.trajectory.joint_names = JOINT_NAMES
         pt = JointTrajectoryPoint()
@@ -243,22 +269,25 @@ class SimArmController(Node):
             sec=int(duration_sec),
             nanosec=int((duration_sec % 1) * 1e9))
         goal.trajectory.points = [pt]
-        self._busy = True
+        self._goal_active = True
 
         def _done(fut):
-            self._busy = False
-            if on_done:
-                on_done()
+            self._goal_active = False
 
         def _accepted(fut):
-            gh = fut.result()
-            if not gh.accepted:
-                self.get_logger().warn('Goal rejected by controller')
-                self._busy = False
-                if on_done:
-                    on_done()
+            try:
+                gh = fut.result()
+            except Exception as exc:
+                self.get_logger().error(f'Goal send error: {exc}')
+                self._goal_active = False
                 return
-            self._current_joints = list(joints)
+            if not gh.accepted:
+                self.get_logger().warn(
+                    f'Goal REJECTED → {[round(j, 2) for j in joints]}')
+                self._goal_active = False
+                return
+            self.get_logger().info(
+                f'Goal accepted → {[round(j, 2) for j in joints]}')
             gh.get_result_async().add_done_callback(_done)
 
         self._action.send_goal_async(goal).add_done_callback(_accepted)

@@ -26,7 +26,7 @@ FIRE_ZONE_H_FACTOR = 0.05
 LOG_FILE = "weed_target.csv"
 
 
-def run_realtime_detection():
+def run_realtime_detection(no_display: bool = False):
     if not os.path.exists(MODEL_PATH):
         print(f"Model file not found: {MODEL_PATH}")
         return
@@ -77,13 +77,6 @@ def run_realtime_detection():
             center_x, center_y = w // 2, h // 2
             fire_zone_w = int(w * FIRE_ZONE_W_FACTOR)
             fire_zone_h = int(h * FIRE_ZONE_H_FACTOR)
-
-            cv2.rectangle(
-                annotated,
-                (center_x - fire_zone_w, center_y - fire_zone_h),
-                (center_x + fire_zone_w, center_y + fire_zone_h),
-                (255, 0, 0), 2
-            )
 
             best_box = None
             best_conf = 0.0
@@ -139,12 +132,20 @@ def run_realtime_detection():
                 ])
 
             else:
+                # Show fire-zone box only when scanning (no detection)
+                cv2.rectangle(
+                    annotated,
+                    (center_x - fire_zone_w, center_y - fire_zone_h),
+                    (center_x + fire_zone_w, center_y + fire_zone_h),
+                    (255, 0, 0), 2
+                )
                 cv2.putText(
                     annotated, "NO WEED", (40, 70),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 255), 3
                 )
 
-            cv2.imshow("YOLO Weed Detection", annotated)
+            if not no_display:
+                cv2.imshow("YOLO Weed Detection", annotated)
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
@@ -157,7 +158,7 @@ def run_realtime_detection():
     print("Finished. CSV saved to:", LOG_FILE)
 
 
-def run_ros_mode(topic: str, model_path: str, confidence: float):
+def run_ros_mode(topic: str, model_path: str, confidence: float, no_display: bool = False):
     """Subscribe to a ROS 2 image topic and run detection, publishing results back."""
     import queue
     import threading
@@ -224,7 +225,7 @@ def run_ros_mode(topic: str, model_path: str, confidence: float):
             try:
                 frame = frame_queue.get(timeout=0.1)
             except queue.Empty:
-                if cv2.waitKey(1) & 0xFF == ord('q'):
+                if not no_display and cv2.waitKey(1) & 0xFF == ord('q'):
                     break
                 continue
 
@@ -236,13 +237,6 @@ def run_ros_mode(topic: str, model_path: str, confidence: float):
             center_x, center_y = w // 2, h // 2
             fire_zone_w = int(w * FIRE_ZONE_W_FACTOR)
             fire_zone_h = int(h * FIRE_ZONE_H_FACTOR)
-
-            cv2.rectangle(
-                annotated,
-                (center_x - fire_zone_w, center_y - fire_zone_h),
-                (center_x + fire_zone_w, center_y + fire_zone_h),
-                (255, 0, 0), 2
-            )
 
             det_array = Detection2DArray()
             best_box = None
@@ -301,6 +295,13 @@ def run_ros_mode(topic: str, model_path: str, confidence: float):
                 det_array.detections.append(det)
 
             else:
+                # Show fire-zone box only when scanning (no detection)
+                cv2.rectangle(
+                    annotated,
+                    (center_x - fire_zone_w, center_y - fire_zone_h),
+                    (center_x + fire_zone_w, center_y + fire_zone_h),
+                    (255, 0, 0), 2
+                )
                 cv2.putText(
                     annotated, "NO WEED", (40, 70),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 255), 3
@@ -310,12 +311,13 @@ def run_ros_mode(topic: str, model_path: str, confidence: float):
             node.img_pub.publish(
                 bridge.cv2_to_imgmsg(annotated, encoding='bgr8'))
 
-            cv2.imshow("YOLO Weed Detection", annotated)
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                break
-            if key == ord('f'):
-                flip_1_2 = not flip_1_2
+            if not no_display:
+                cv2.imshow("YOLO Weed Detection", annotated)
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
+                    break
+                if key == ord('f'):
+                    flip_1_2 = not flip_1_2
 
     finally:
         cv2.destroyAllWindows()
@@ -339,12 +341,16 @@ if __name__ == "__main__":
     parser.add_argument(
         '--confidence', type=float, default=CONFIDENCE_THRESHOLD,
         help='Detection confidence threshold (default: %(default)s)')
+    parser.add_argument(
+        '--no-display', action='store_true',
+        help='Suppress the OpenCV preview window (useful when running headless)')
     args = parser.parse_args()
 
     if args.model:
         MODEL_PATH = args.model
 
     if args.topic:
-        run_ros_mode(args.topic, MODEL_PATH, args.confidence)
+        run_ros_mode(args.topic, MODEL_PATH, args.confidence,
+                     no_display=args.no_display)
     else:
-        run_realtime_detection()
+        run_realtime_detection(no_display=args.no_display)

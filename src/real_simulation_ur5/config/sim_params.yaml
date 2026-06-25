@@ -1,12 +1,14 @@
 sim_arm_controller:
   ros__parameters:
     # Seconds to wait at each scan pose for a weed detection
-    scan_dwell_time: 3.0
+    scan_dwell_time: 0.5
     # Seconds to pause after a weed is detected (simulates treatment)
-    detection_pause: 2.0
+    detection_pause: 1.0
     # Seconds for each arm move between scan poses
-    scan_move_time: 2.0
-    use_sim_time: true
+    scan_move_time: 1.5
+    # Wall time for timers — Gazebo sim clock stalls at 0 on WSL2,
+    # which prevents create_timer() from ever firing with use_sim_time:true.
+    use_sim_time: false
 
 sim_detection_node:
   ros__parameters:

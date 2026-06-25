@@ -97,22 +97,33 @@ class TestLaunchFile:
 
 class TestInstalledPaths:
 
+    @classmethod
+    def setup_class(cls):
+        import sys
+        # test_camera_tf mocks ament_index_python at module level; remove the
+        # mock so we get the real get_package_share_directory.
+        for mod_name in ['ament_index_python', 'ament_index_python.packages']:
+            if mod_name in sys.modules:
+                del sys.modules[mod_name]
+        from ament_index_python.packages import get_package_share_directory
+        cls._pkg_share = Path(get_package_share_directory('watermelon_demo'))
+
     def test_world_file_installed(self):
-        path = PKG_SHARE / 'worlds' / 'watermelon_field.sdf'
+        path = self._pkg_share / 'worlds' / 'watermelon_field.sdf'
         assert path.exists(), f"Installed world file not found at {path}"
 
     def test_urdf_file_installed(self):
-        path = PKG_SHARE / 'urdf' / 'ur5_with_sensors.urdf.xacro'
+        path = self._pkg_share / 'urdf' / 'ur5_with_sensors.urdf.xacro'
         assert path.exists(), f"Installed URDF not found at {path}"
 
     def test_params_file_installed(self):
-        path = PKG_SHARE / 'config' / 'demo_params.yaml'
+        path = self._pkg_share / 'config' / 'demo_params.yaml'
         assert path.exists(), f"Installed params not found at {path}"
 
     def test_rviz_config_installed(self):
-        path = PKG_SHARE / 'config' / 'demo_rviz.rviz'
+        path = self._pkg_share / 'config' / 'demo_rviz.rviz'
         assert path.exists(), f"Installed RViz config not found at {path}"
 
     def test_launch_file_installed(self):
-        path = PKG_SHARE / 'launch' / 'demo.launch.py'
+        path = self._pkg_share / 'launch' / 'demo.launch.py'
         assert path.exists(), f"Installed launch file not found at {path}"

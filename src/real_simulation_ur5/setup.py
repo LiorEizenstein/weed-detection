@@ -34,6 +34,7 @@ setup(
             'laser_effect_node   = real_simulation_ur5.laser_effect_node:main',
             'sim_detection_node  = real_simulation_ur5.sim_detection_node:main',
             'sim_arm_controller  = real_simulation_ur5.sim_arm_controller:main',
+            'joint_state_restamper = real_simulation_ur5.joint_state_restamper:main',
         ],
     },
 )
