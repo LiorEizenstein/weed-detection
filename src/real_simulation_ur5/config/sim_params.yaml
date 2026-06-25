@@ -6,9 +6,9 @@ sim_arm_controller:
     detection_pause: 1.0
     # Seconds for each arm move between scan poses
     scan_move_time: 1.5
-    # Wall time for timers — Gazebo sim clock stalls at 0 on WSL2,
-    # which prevents create_timer() from ever firing with use_sim_time:true.
-    use_sim_time: false
+    # Sim time — the /clock bridge in sim.launch.py publishes Gazebo time, so
+    # timers fire on sim time consistently with the controller stack.
+    use_sim_time: true
 
 sim_detection_node:
   ros__parameters:

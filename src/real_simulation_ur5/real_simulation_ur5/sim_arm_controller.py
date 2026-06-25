@@ -7,14 +7,13 @@ Behaviour:
   3. Dwell scan_dwell_time seconds at each pose, collecting /detections.
      Any weeds found are logged and published as RViz markers.
   4. Move to the next pose and repeat until the final pose is reached.
-  5. Stop at the final pose (no reverse sweep).
+  5. Swing back to the first pose and run the sweep again — continuous patrol.
 
 States:
   WAIT_SERVER  — polling for /arm_controller action server
   INIT_MOVE    — moving to the first scan pose
-  MOVING       — moving to the next scan pose
+  MOVING       — moving to the next scan pose (or back to the start)
   DWELLING     — holding pose, watching for weeds
-  DONE         — sweep complete, arm holds final pose
 
 Topics subscribed:
   /detections    vision_msgs/Detection2DArray
@@ -66,6 +65,10 @@ ACTION_SERVER = '/arm_controller/follow_joint_trajectory'
 # Must be comfortably longer than scan_move_time so the arm can settle.
 _MOVE_TIMEOUT_FACTOR = 2.5
 
+# Seconds for the long return swing from the final pose back to the start.
+# Larger than a normal step because it covers the full sweep span (180°).
+_RETURN_MOVE_TIME = 3.0
+
 
 class _S:
     WAIT_SERVER = 'WAIT_SERVER'
@@ -97,8 +100,10 @@ class SimArmController(Node):
         self._joints_ok       = False
         self._state_entered   = 0.0
         self._goal_active     = False
+        self._move_duration   = 0.0        # duration of the in-flight move goal
         self._dwell_dets      = []
         self._detections_total = 0
+        self._passes_done     = 0          # completed full sweeps
 
         self._timer = self.create_timer(0.1, self._tick)
         self.get_logger().info(
@@ -162,8 +167,7 @@ class SimArmController(Node):
 
         # ── MOVING ───────────────────────────────────────────────────────────
         if self._state == _S.MOVING:
-            move_time = self.get_parameter('scan_move_time').value
-            timeout   = move_time * _MOVE_TIMEOUT_FACTOR
+            timeout = self._move_duration * _MOVE_TIMEOUT_FACTOR
             if self._goal_active and now - self._state_entered < timeout:
                 return
             if self._goal_active:
@@ -181,12 +185,16 @@ class SimArmController(Node):
                 return
             # Dwell complete — log weeds
             self._flush_detections()
-            # Advance or stop
+            # End of sweep → swing back to the start and run another pass.
             if self._pose_idx >= len(SCAN_POSES) - 1:
+                self._passes_done += 1
                 self.get_logger().info(
-                    f'Sweep complete — reached final pose '
-                    f'({math.degrees(_PAN_MAX):.0f}°). Holding position.')
-                self._enter(_S.DONE)
+                    f'Sweep #{self._passes_done} complete — reached final pose '
+                    f'({math.degrees(_PAN_MAX):.0f}°). Returning to start for '
+                    f'pass #{self._passes_done + 1}.')
+                self._pose_idx = 0
+                self._send_goal(SCAN_POSES[0], duration_sec=_RETURN_MOVE_TIME)
+                self._enter(_S.MOVING)
                 return
             self._pose_idx += 1
             pose      = SCAN_POSES[self._pose_idx]
@@ -270,6 +278,7 @@ class SimArmController(Node):
             nanosec=int((duration_sec % 1) * 1e9))
         goal.trajectory.points = [pt]
         self._goal_active = True
+        self._move_duration = duration_sec
 
         def _done(fut):
             self._goal_active = False

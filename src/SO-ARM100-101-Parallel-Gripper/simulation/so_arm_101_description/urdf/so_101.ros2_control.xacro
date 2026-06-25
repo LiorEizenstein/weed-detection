@@ -1,0 +1,104 @@
+<?xml version="1.0" ?>
+<robot name="so_101" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- Real-hardware (Feetech) connection params; only used when sim_backend:=hardware -->
+  <xacro:arg name="usb_port" default="/dev/ttyUSB0"/>
+  <xacro:arg name="joint_config_file" default=""/>
+
+  <xacro:macro name="so_101_ros2_control" params="sim_backend">
+
+    <!-- Select hardware plugin based on sim_backend argument -->
+    <xacro:property name="gz_plugin" value="gz_ros2_control/GazeboSimSystem"/>
+    <xacro:property name="mujoco_plugin" value="mujoco_ros2_control/MujocoSystemInterface"/>
+    <xacro:property name="webots_plugin" value="webots_ros2_control::Ros2ControlSystem"/>
+    <xacro:property name="isaac_plugin" value="topic_based_ros2_control/TopicBasedSystem"/>
+    <xacro:property name="coppeliasim_plugin" value="topic_based_ros2_control/TopicBasedSystem"/>
+    <xacro:property name="hardware_plugin" value="feetech_ros2_driver/FeetechHardwareInterface"/>
+
+    <xacro:if value="${sim_backend == 'gazebo'}">
+      <xacro:property name="plugin_name" value="${gz_plugin}"/>
+    </xacro:if>
+    <xacro:if value="${sim_backend == 'mujoco'}">
+      <xacro:property name="plugin_name" value="${mujoco_plugin}"/>
+    </xacro:if>
+    <xacro:if value="${sim_backend == 'webots'}">
+      <xacro:property name="plugin_name" value="${webots_plugin}"/>
+    </xacro:if>
+    <xacro:if value="${sim_backend == 'isaac'}">
+      <xacro:property name="plugin_name" value="${isaac_plugin}"/>
+    </xacro:if>
+    <xacro:if value="${sim_backend == 'coppeliasim'}">
+      <xacro:property name="plugin_name" value="${coppeliasim_plugin}"/>
+    </xacro:if>
+    <xacro:if value="${sim_backend == 'hardware'}">
+      <xacro:property name="plugin_name" value="${hardware_plugin}"/>
+    </xacro:if>
+
+    <ros2_control name="so_101_system" type="system">
+      <hardware>
+        <plugin>${plugin_name}</plugin>
+        <!-- MuJoCo-specific parameters (plugin reads URDF from robot_description param) -->
+        <xacro:if value="${sim_backend == 'mujoco'}">
+          <param name="headless">false</param>
+          <param name="sim_speed_factor">1.0</param>
+        </xacro:if>
+        <!-- Real Feetech servo bus (feetech_ros2_driver). Per-joint servo IDs
+             and calibration are supplied via joint_config_file (keyed by joint
+             name) — see real_simulation_ur5/config/so101_feetech_joints.yaml. -->
+        <xacro:if value="${sim_backend == 'hardware'}">
+          <param name="usb_port">$(arg usb_port)</param>
+          <param name="joint_config_file">$(arg joint_config_file)</param>
+        </xacro:if>
+      </hardware>
+
+      <!-- Arm joints -->
+      <joint name="base_link_to_link1">
+        <command_interface name="position"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+      <joint name="link1_to_link2">
+        <command_interface name="position"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+      <joint name="link2_to_link3">
+        <command_interface name="position"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+      <joint name="link3_to_link4">
+        <command_interface name="position"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+      <joint name="link4_to_link5">
+        <command_interface name="position"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+
+    </ros2_control>
+
+    <!-- Webots ros2_control driver plugin (loads Ros2Control into webots_ros2_driver) -->
+    <xacro:if value="${sim_backend == 'webots'}">
+      <webots>
+        <plugin type="webots_ros2_control::Ros2Control"/>
+      </webots>
+    </xacro:if>
+
+    <!-- Gazebo ros2_control plugin -->
+    <xacro:if value="${sim_backend == 'gazebo'}">
+      <gazebo>
+        <plugin filename="libgz_ros2_control-system.so" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+          <parameters>$(find so_arm_101_description)/config/controllers.yaml</parameters>
+        </plugin>
+      </gazebo>
+    </xacro:if>
+
+  </xacro:macro>
+
+  <!-- Invoke the macro with the sim_backend argument -->
+  <xacro:so_101_ros2_control sim_backend="$(arg sim_backend)"/>
+
+</robot>

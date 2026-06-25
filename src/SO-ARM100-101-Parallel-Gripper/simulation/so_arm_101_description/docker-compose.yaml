@@ -1,0 +1,144 @@
+# SO-ARM-101 Description — Docker Compose
+# Usage:
+#   docker compose run build        # Build package and open shell
+#   docker compose run validate     # Validate URDF for all backends
+#   docker compose run test         # Run pytest offline tests
+#   docker compose run rviz         # Launch RViz (needs X11)
+#   docker compose run gazebo       # Launch Gazebo (needs X11 + GPU)
+#   docker compose run mujoco       # Launch MuJoCo (needs X11)
+#   docker compose run webots       # Launch Webots (needs X11)
+
+x-common: &common
+  build:
+    context: .
+    dockerfile: Dockerfile
+    target: base
+  volumes:
+    - .:/ws/src/so_arm_101_description
+  stdin_open: true
+  tty: true
+
+services:
+  # Interactive shell with workspace built
+  build:
+    <<: *common
+    command: bash
+
+  # Validate URDF with check_urdf for all 5 backends
+  validate:
+    <<: *common
+    command: >
+      bash -c '
+        for backend in gazebo mujoco webots coppeliasim isaac; do
+          echo "--- $$backend ---"
+          xacro /ws/src/so_arm_101_description/urdf/so_101.urdf.xacro sim_backend:=$$backend | check_urdf /dev/stdin
+        done
+      '
+
+  # Run offline pytest suite
+  test:
+    <<: *common
+    command: >
+      bash -c '
+        cd /ws/src/so_arm_101_description &&
+        python3 -m pytest test/ -v
+      '
+
+  # Launch file parse check (no simulator needed)
+  check-launch:
+    <<: *common
+    command: >
+      bash -c '
+        for sim in gazebo mujoco webots coppeliasim isaac; do
+          echo "--- $$sim ---"
+          ros2 launch so_arm_101_description sim.launch.py sim:=$$sim --print 2>&1 | head -5
+          echo ""
+        done
+      '
+
+  # RViz visualization (needs DISPLAY and X11)
+  rviz:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: rviz
+    volumes:
+      - .:/ws/src/so_arm_101_description
+    environment:
+      - DISPLAY=${DISPLAY:-host.docker.internal:0}
+    network_mode: host
+    stdin_open: true
+    tty: true
+    command: ros2 launch so_arm_101_description display.launch.py
+
+  # Gazebo simulation (needs DISPLAY and optionally GPU)
+  gazebo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: gazebo
+    volumes:
+      - .:/ws/src/so_arm_101_description
+    environment:
+      - DISPLAY=${DISPLAY:-host.docker.internal:0}
+      - GZ_SIM_RESOURCE_PATH=/ws/install/so_arm_101_description/share
+    network_mode: host
+    stdin_open: true
+    tty: true
+    # Uncomment for NVIDIA GPU passthrough:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    command: ros2 launch so_arm_101_description sim.launch.py sim:=gazebo
+
+  # MuJoCo simulation (needs DISPLAY for rendering window)
+  mujoco:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: mujoco
+    volumes:
+      - .:/ws/src/so_arm_101_description
+    environment:
+      - DISPLAY=${DISPLAY:-host.docker.internal:0}
+    network_mode: host
+    stdin_open: true
+    tty: true
+    # Uncomment for NVIDIA GPU passthrough (hardware-accelerated rendering):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    command: ros2 launch so_arm_101_description sim.launch.py sim:=mujoco
+
+  # Webots simulation (needs DISPLAY)
+  # Note: no volume mount — the Docker image contains the generated
+  # webots_sim.wbt world file which would be overwritten by a bind mount.
+  webots:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: webots
+    environment:
+      - DISPLAY=${DISPLAY:-host.docker.internal:0}
+      - WEBOTS_HOME=/usr/local/webots
+      - USER=root
+    network_mode: host
+    stdin_open: true
+    tty: true
+    # Uncomment for NVIDIA GPU passthrough:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    command: ros2 launch so_arm_101_description sim.launch.py sim:=webots

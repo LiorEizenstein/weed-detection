@@ -67,20 +67,32 @@ def generate_launch_description():
         launch_arguments={'gz_args': f'-r {world_file}'}.items(),
     )
 
+    # ── 1b. Clock bridge — publishes Gazebo sim time onto ROS /clock ──────────
+    # Without this the gz_ros2_control controller_manager never receives /clock
+    # ("No clock received, using time argument instead!"), so the JTC samples
+    # its trajectory on wall time while physics steps on sim time — the joints
+    # stop tracking after the first settle. Must be up before the controllers.
+    clock_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        name='clock_bridge',
+        arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'],
+        output='screen',
+    )
+
     # ── 2. robot_state_publisher — publishes /robot_description + TF ─────────
     robot_description = ParameterValue(
         Command(['xacro ', xacro_file, ' sim_backend:=gazebo']),
         value_type=str,
     )
-    # Republish /joint_states with current wall-time header stamp so that
-    # robot_state_publisher can timestamp TF correctly.  Gazebo's
-    # joint_state_broadcaster sets header.stamp = sim time (stuck at 0 on
-    # WSL2), which makes every TF transform appear 30+ seconds stale in RViz.
+    # Republish /joint_states with a current header stamp so robot_state_publisher
+    # can timestamp TF correctly. With the /clock bridge up (1b) all nodes share
+    # Gazebo's sim time, so use_sim_time:true here keeps stamps consistent.
     joint_state_restamper = Node(
         package='real_simulation_ur5',
         executable='joint_state_restamper',
         name='joint_state_restamper',
-        parameters=[{'use_sim_time': False}],
+        parameters=[{'use_sim_time': True}],
         output='screen',
     )
 
@@ -89,7 +101,7 @@ def generate_launch_description():
         executable='robot_state_publisher',
         parameters=[{
             'robot_description': robot_description,
-            'use_sim_time': False,
+            'use_sim_time': True,
             'publish_frequency': 50.0,
         }],
         # Subscribe to the wall-time-stamped joint states, not the raw ones
@@ -160,16 +172,16 @@ def generate_launch_description():
             package='real_simulation_ur5',
             executable='sim_arm_controller',
             name='sim_arm_controller',
-            # use_sim_time must be False — Gazebo's sim clock stalls at t=0
-            # on WSL2, so timers created with use_sim_time:true never fire.
-            parameters=[params_file, {'use_sim_time': False}],
+            # With the /clock bridge (1b) publishing Gazebo sim time, the
+            # controller and timers run on sim time like the rest of the stack.
+            parameters=[params_file, {'use_sim_time': True}],
             output='screen',
         ),
         Node(
             package='rviz2',
             executable='rviz2',
             name='rviz2',
-            parameters=[{'use_sim_time': False}],
+            parameters=[{'use_sim_time': True}],
             arguments=['-d', rviz_config],
             output='log',
         ),
@@ -180,6 +192,7 @@ def generate_launch_description():
         gz_plugin_path,
         gz_resource_path,
         gz_sim,
+        clock_bridge,
         joint_state_restamper,
         robot_state_publisher,
         gz_spawn,

@@ -1,0 +1,42 @@
+controller_manager:
+  ros__parameters:
+    use_sim_time: true
+    update_rate: 250
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+
+joint_state_broadcaster:
+  ros__parameters: {}
+
+arm_controller:
+  ros__parameters:
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+    state_publish_rate: 50.0
+    action_monitor_rate: 20.0
+    joints:
+      - base_link_to_link1
+      - link1_to_link2
+      - link2_to_link3
+      - link3_to_link4
+      - link4_to_link5
+    # Goal tolerances — without these the JTC declares success purely on elapsed
+    # time, masking joints that never reach the commanded position. A violation
+    # now surfaces as an explicit "goal tolerance violated" error.
+    constraints:
+      stopped_velocity_tolerance: 0.05
+      goal_time: 2.0
+      base_link_to_link1: {goal: 0.05}
+      link1_to_link2: {goal: 0.05}
+      link2_to_link3: {goal: 0.05}
+      link3_to_link4: {goal: 0.05}
+      link4_to_link5: {goal: 0.05}
+

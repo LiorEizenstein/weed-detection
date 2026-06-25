@@ -1,0 +1,78 @@
+# so101_feetech_joints.yaml — Feetech STS3215 per-joint config for the real
+# SO-ARM101, consumed by feetech_ros2_driver (FeetechHardwareInterface) via the
+# `joint_config_file` hardware param in so_101.ros2_control.xacro.
+#
+# Keys MUST match the ros2_control joint names (see so_101.ros2_control.xacro).
+# `id` is the servo's bus ID. range_min/range_max/homing_offset are in RAW SERVO
+# TICKS (0–4095; servos center at 2048), NOT radians.
+#
+# ⚠️  CALIBRATION REQUIRED BEFORE ANY REAL MOTION  ⚠️
+# The homing_offset and range_min/range_max below are UNCALIBRATED PLACEHOLDERS.
+# homing_offset=0 + full 0..4095 range means the driver will NOT clamp travel and
+# the zero pose will be wrong. Calibrate each joint (e.g. with the Feetech FD app
+# or LeRobot's calibration) and replace the values before powering the arm under
+# control. URDF software limits (radians) are noted per joint for cross-checking.
+#
+# PID/accel defaults are copied from the known-good SO-101 reference config
+# (legalaspro/so101-ros-physical-ai).
+
+joints:
+  # Joint 1 — base yaw.       URDF limit: [-2.094, +2.094] rad
+  base_link_to_link1:
+    id: 1
+    homing_offset: 0          # PLACEHOLDER — calibrate
+    range_min: 0              # PLACEHOLDER — calibrate
+    range_max: 4095           # PLACEHOLDER — calibrate
+    p_coefficient: 16
+    i_coefficient: 0
+    d_coefficient: 32
+    return_delay_time: 0
+    acceleration: 254
+
+  # Joint 2 — shoulder pitch. URDF limit: [-3.229, +0.175] rad
+  link1_to_link2:
+    id: 2
+    homing_offset: 0          # PLACEHOLDER — calibrate
+    range_min: 0              # PLACEHOLDER — calibrate
+    range_max: 4095           # PLACEHOLDER — calibrate
+    p_coefficient: 16
+    i_coefficient: 0
+    d_coefficient: 32
+    return_delay_time: 0
+    acceleration: 254
+
+  # Joint 3 — elbow.          URDF limit: [ 0.000, +3.316] rad
+  link2_to_link3:
+    id: 3
+    homing_offset: 0          # PLACEHOLDER — calibrate
+    range_min: 0              # PLACEHOLDER — calibrate
+    range_max: 4095           # PLACEHOLDER — calibrate
+    p_coefficient: 16
+    i_coefficient: 0
+    d_coefficient: 32
+    return_delay_time: 0
+    acceleration: 254
+
+  # Joint 4 — wrist pitch.    URDF limit: [-1.658, +1.658] rad
+  link3_to_link4:
+    id: 4
+    homing_offset: 0          # PLACEHOLDER — calibrate
+    range_min: 0              # PLACEHOLDER — calibrate
+    range_max: 4095           # PLACEHOLDER — calibrate
+    p_coefficient: 16
+    i_coefficient: 0
+    d_coefficient: 32
+    return_delay_time: 0
+    acceleration: 254
+
+  # Joint 5 — wrist roll.     URDF limit: [-4.276, +1.571] rad
+  link4_to_link5:
+    id: 5
+    homing_offset: 0          # PLACEHOLDER — calibrate
+    range_min: 0              # PLACEHOLDER — calibrate
+    range_max: 4095           # PLACEHOLDER — calibrate
+    p_coefficient: 16
+    i_coefficient: 0
+    d_coefficient: 32
+    return_delay_time: 0
+    acceleration: 254

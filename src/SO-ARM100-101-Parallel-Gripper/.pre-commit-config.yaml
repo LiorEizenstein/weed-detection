@@ -1,0 +1,43 @@
+repos:
+  # General file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.stl$|\.obj$|\.STL$|\.STEP$|\.step$'
+      - id: end-of-file-fixer
+        exclude: '\.stl$|\.obj$|\.STL$|\.STEP$|\.step$'
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+        exclude: '\.stl$|\.obj$|\.STL$|\.STEP$|\.step$'
+      - id: check-yaml
+      - id: check-xml
+      - id: check-added-large-files
+        args: ['--maxkb=1024']
+      - id: check-merge-conflict
+      - id: check-case-conflict
+
+  # Python linting
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.1.1
+    hooks:
+      - id: flake8
+        args: ['--max-line-length=100', '--extend-ignore=E203,W503']
+        exclude: 'software/|examples/'
+
+  # Python import sorting
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ['--profile=black', '--line-length=100']
+
+  # XML/URDF validation (only for simulation subpackage)
+  - repo: local
+    hooks:
+      - id: validate-xacro
+        name: Validate xacro/XML files
+        entry: python simulation/so_arm_101_description/scripts/validate_xml.py
+        language: python
+        files: '\.(xml|xacro|urdf)$'
+        pass_filenames: true

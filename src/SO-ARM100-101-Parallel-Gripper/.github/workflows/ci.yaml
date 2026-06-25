@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pre-commit flake8 isort
+
+      - name: Run pre-commit hooks
+        run: pre-commit run --all-files
+
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Validate XML files
+        run: python simulation/so_arm_101_description/scripts/validate_xml.py simulation/so_arm_101_description/urdf/*.xacro simulation/so_arm_101_description/worlds/*.sdf
+
+      - name: Validate YAML files
+        run: python -c "import yaml; [yaml.safe_load(open(f)) for f in ['simulation/so_arm_101_description/config/controllers.yaml']]"
+
+      - name: Check Python syntax
+        run: |
+          find simulation/so_arm_101_description -name "*.py" -exec python -m py_compile {} \;
+          echo "All Python files compile OK"
+
+      - name: Validate package.xml
+        run: python -c "import xml.etree.ElementTree as ET; ET.parse('simulation/so_arm_101_description/package.xml'); print('package.xml OK')"
+
+  urdf:
+    runs-on: ubuntu-latest
+    container:
+      image: ros:humble
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends \
+            ros-humble-xacro \
+            python3-colcon-common-extensions
+
+      - name: Build package
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          mkdir -p /ws/src
+          cp -r simulation/so_arm_101_description /ws/src/
+          cd /ws
+          colcon build --packages-select so_arm_101_description
+          source install/setup.bash
+
+      - name: Validate URDF for all backends
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          source /ws/install/setup.bash
+          for backend in gazebo mujoco webots coppeliasim isaac; do
+            echo "--- $backend ---"
+            xacro /ws/src/so_arm_101_description/urdf/so_101.urdf.xacro sim_backend:=$backend | check_urdf /dev/stdin
+          done
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pytest trimesh numpy mujoco pyyaml
+
+      - name: Run offline tests
+        run: |
+          cd simulation/so_arm_101_description
+          python -m pytest test/ -v

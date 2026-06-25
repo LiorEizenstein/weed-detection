@@ -10,13 +10,14 @@ What's different from sim.launch.py:
     shows the robot model before the Feetech hardware driver is ready.
     Set false once the hardware driver provides real /joint_states.
 
-TODO — blocked on Feetech hardware driver:
-  When the driver is ready, add here:
-    - ros2_control controller_manager node (loaded with so_101 hardware plugin)
-    - spawner for joint_state_broadcaster  (replaces fake_joint_publisher)
-    - spawner for arm_controller           (provides the action server)
-    - spawner for gripper_controller
-  Then launch with: use_fake_joints:=false
+Real hardware (use_fake_joints:=false):
+  Loads the Feetech ros2_control hardware interface (feetech_ros2_driver) via
+  the URDF and spawns joint_state_broadcaster + arm_controller, providing
+  /arm_controller/follow_joint_trajectory.  Requires:
+    - sudo apt install ros-jazzy-feetech-ros2-driver
+    - the servo bus attached (usb_port:=/dev/ttyUSB0 or /dev/ttyACM0)
+    - a CALIBRATED config/so101_feetech_joints.yaml (servo IDs + homing offsets)
+  Default use_fake_joints:=true just publishes zero joint states for RViz.
 
 Usage:
     ros2 launch real_simulation_ur5 real.launch.py
@@ -31,7 +32,7 @@ import sys
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -43,9 +44,11 @@ def generate_launch_description():
     pkg_sim   = get_package_share_directory('real_simulation_ur5')
     pkg_so101 = get_package_share_directory('so_arm_101_description')
 
-    xacro_file  = os.path.join(pkg_so101, 'urdf',   'so_101.urdf.xacro')
-    params_file = os.path.join(pkg_sim,   'config', 'sim_params.yaml')
-    rviz_config = os.path.join(pkg_sim,   'config', 'sim.rviz')
+    xacro_file        = os.path.join(pkg_so101, 'urdf',   'so_101.urdf.xacro')
+    params_file       = os.path.join(pkg_sim,   'config', 'sim_params.yaml')
+    rviz_config       = os.path.join(pkg_sim,   'config', 'sim.rviz')
+    controllers_yaml  = os.path.join(pkg_so101, 'config', 'controllers.yaml')
+    joint_config_file = os.path.join(pkg_sim,   'config', 'so101_feetech_joints.yaml')
 
     # ── Launch arguments ──────────────────────────────────────────────────────
     model_path_arg = DeclareLaunchArgument(
@@ -64,18 +67,24 @@ def generate_launch_description():
         'use_fake_joints', default_value='true',
         description='Publish zero joint states for RViz (disable when hardware driver runs)')
 
+    usb_port_arg = DeclareLaunchArgument(
+        'usb_port', default_value='/dev/ttyUSB0',
+        description='Feetech servo bus serial port (ls /dev/ttyACM* /dev/ttyUSB*)')
+
     model_path      = LaunchConfiguration('model_path')
     camera_device   = LaunchConfiguration('camera_device')
     dry_run         = LaunchConfiguration('dry_run')
     use_fake_joints = LaunchConfiguration('use_fake_joints')
+    usb_port        = LaunchConfiguration('usb_port')
 
     # ── 1. Robot description + TF ─────────────────────────────────────────────
-    # sim_backend:=hardware strips the Gazebo plugin so the URDF loads without
-    # Gazebo.  The hardware plugin entry in the URDF is currently a placeholder
-    # (ros2_control_demo_hardware) — replace with the real Feetech plugin once
-    # the driver is ready.
+    # sim_backend:=hardware selects the Feetech ros2_control hardware interface
+    # (feetech_ros2_driver/FeetechHardwareInterface) and passes the servo bus
+    # port + per-joint calibration file into the URDF's <hardware> block.
     robot_description = ParameterValue(
-        Command(['xacro ', xacro_file, ' sim_backend:=hardware']),
+        Command(['xacro ', xacro_file, ' sim_backend:=hardware',
+                 ' usb_port:=', usb_port,
+                 ' joint_config_file:=', joint_config_file]),
         value_type=str,
     )
 
@@ -113,6 +122,38 @@ def generate_launch_description():
             'use_sim_time': False,
         }],
         condition=IfCondition(use_fake_joints),
+        output='screen',
+    )
+
+    # ── 2b. Real hardware: ros2_control + controller spawners ─────────────────
+    # Active only when use_fake_joints:=false.  ros2_control_node loads the
+    # Feetech hardware interface from robot_description, then the spawners bring
+    # up the controllers from controllers.yaml.  arm_controller provides
+    # /arm_controller/follow_joint_trajectory (what sim_arm_controller calls),
+    # and joint_state_broadcaster publishes real /joint_states.
+    controller_manager = Node(
+        package='controller_manager',
+        executable='ros2_control_node',
+        parameters=[controllers_yaml, {'robot_description': robot_description}],
+        condition=UnlessCondition(use_fake_joints),
+        output='screen',
+    )
+    spawner_jsb = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['joint_state_broadcaster',
+                   '--controller-manager', '/controller_manager',
+                   '--controller-manager-timeout', '60'],
+        condition=UnlessCondition(use_fake_joints),
+        output='screen',
+    )
+    spawner_arm = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['arm_controller',
+                   '--controller-manager', '/controller_manager',
+                   '--controller-manager-timeout', '60'],
+        condition=UnlessCondition(use_fake_joints),
         output='screen',
     )
 
@@ -180,9 +221,13 @@ def generate_launch_description():
         camera_device_arg,
         dry_run_arg,
         use_fake_joints_arg,
+        usb_port_arg,
         joint_state_restamper,
         robot_state_publisher,
         fake_joint_publisher,
+        controller_manager,
+        spawner_jsb,
+        spawner_arm,
         usb_camera,
         weed_detection,
         sim_arm_controller,
